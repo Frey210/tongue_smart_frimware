@@ -10,6 +10,7 @@ Firmware offline-first berbasis PlatformIO untuk ESP32-S3. Root proyek ini senga
 - UI TFT 320×240, tombol aktif-low dengan debounce, dan stepper non-blocking.
 - Hasil JSON offline di LittleFS `/results`, selalu diawali status `pending`.
 - USB CDC dengan command `help`, `status`, dan `results`.
+- Kontrak sinkronisasi backend tersedia di `HTTP_SYNC.md`; implementasi jaringan dan upload ESP tetap ditunda.
 
 ## Build dan upload
 
