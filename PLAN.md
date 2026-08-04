@@ -34,6 +34,8 @@ Firmware ESP32-S3 yang deterministic, offline-first, dan dapat menyelesaikan wor
 
 - Pisahkan application state machine dari task bootstrap.
 - Workflow per pemeriksaan dan complete examination.
+- Stage EMG membawa kode posisi elektroda dari sesi dashboard atau pilihan LCD untuk operasi offline; posisi aktif ditampilkan sebelum countdown dan disimpan bersama hasil.
+- Perubahan posisi elektroda setelah pengukuran dimulai wajib menghasilkan stage baru, bukan menimpa metadata hasil sebelumnya.
 - Safety task/watchdog dan motor interlock.
 - Hasil menyimpan peak/mean/duration/quality serta calibration reference.
 
