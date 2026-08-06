@@ -13,6 +13,17 @@ Secret perangkat tidak boleh ditulis ke repository. Nilai `X-Device-Key` nantiny
 5. Receipt disimpan lokal; data baru boleh ditandai tersinkron setelah receipt diterima.
 6. Retry memakai `message_id`, `sequence`, dan checksum yang sama agar idempoten.
 
+## Kontrol tahap pengukuran
+
+Perangkat/simulator mengambil sesi aktif melalui:
+
+```http
+GET /device/sessions/active?device_id=tongue-smart-v3
+X-Device-Key: <secret dari NVS>
+```
+
+Respons membawa `control` terbaru: `measurement`, `phase`, `protocol_stage`, dan `fsr_point`. Akuisisi jaringan hanya menyinkronkan modul yang sedang dikontrol. Nilai `paused` atau belum adanya kontrol berarti task jaringan menunggu tanpa membuat sampel baru. Kontrol dashboard tidak boleh melewati interlock keselamatan lokal firmware.
+
 ## Ingest batch
 
 ```http
