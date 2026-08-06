@@ -7,7 +7,9 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <math.h>
+#include <time.h>
 #include "config.h"
+#include "device_api.h"
 #include "storage_manager.h"
 #include "types.h"
 #include "ui.h"
@@ -22,13 +24,13 @@ static AccelStepper stepper(AccelStepper::DRIVER, hw::STEPPER_STEP, hw::STEPPER_
 static StorageManager storage;
 static UserInterface ui;
 static Preferences preferences;
-static char apiUrl[160] = {};
+static DeviceApi deviceApi;
 
 static void enqueueSyncEvent(const char* event, const char* suffix) {
   SyncEvent sync{};
   strlcpy(sync.event, event, sizeof(sync.event));
   sync.uptimeMs = millis();
-  snprintf(sync.messageId, sizeof(sync.messageId), "%s-%08lx-%s", cfg::DEVICE_ID,
+  snprintf(sync.messageId, sizeof(sync.messageId), "%s-%08lx-%s", deviceApi.deviceId(),
     static_cast<unsigned long>(esp_random()), suffix);
   xQueueSend(gSyncQueue, &sync, 0);
 }
@@ -94,6 +96,9 @@ static void sensorTask(void*) {
       if (isfinite(force) && fabsf(force) < 100000.0F) sample.lipForce = force;
       else sample.hx711Ready = false;
     }
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    gStatus.sample = sample;
+    xSemaphoreGive(gStatusMutex);
     xQueueOverwrite(gSensorQueue, &sample);
     xEventGroupSetBits(gSystemEvents, EVT_SENSOR_OK);
     vTaskDelayUntil(&wake, pdMS_TO_TICKS(cfg::SENSOR_PERIOD_MS));
@@ -299,7 +304,7 @@ static void appTask(void*) {
         if (index == 0) updateStatus(AppState::ExaminationMenu, "Choose examination", true);
         else if (index == 1) updateStatus(AppState::History, "Use USB command: results");
         else if (index == 2) updateStatus(AppState::Calibration, "Calibration menu");
-        else if (index == 3) updateStatus(AppState::Settings, "OK: start WiFi setup portal");
+        else if (index == 3) updateStatus(AppState::Settings, "Choose connectivity action", true);
         else updateStatus(AppState::About, "Offline clinical firmware");
       }
     } else if (state == AppState::ExaminationMenu) {
@@ -321,10 +326,18 @@ static void appTask(void*) {
       }
     } else if (state == AppState::PatientReady && event.id == ButtonId::Ok) {
       runMeasurement(gStatus.examination);
-    } else if (state == AppState::Settings && event.id == ButtonId::Ok) {
-      const WifiCommand command{WifiCommandType::StartPortal};
-      xQueueSend(gWifiCommandQueue, &command, 0);
-      updateStatus(AppState::Settings, "Starting WiFi portal...");
+    } else if (state == AppState::Settings) {
+      if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
+        index = (index + 1) % 2;
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        gStatus.menuIndex = index;
+        xSemaphoreGive(gStatusMutex);
+      } else if (event.id == ButtonId::Ok) {
+        const WifiCommand command{index == 0 ? WifiCommandType::StartPortal : WifiCommandType::StartPairing};
+        xQueueSend(gWifiCommandQueue, &command, 0);
+        updateStatus(index == 0 ? AppState::Settings : AppState::DevicePairing,
+                     index == 0 ? "Starting WiFi portal..." : "Requesting pairing code...");
+      }
     } else if (state == AppState::Result && event.id == ButtonId::Ok) {
       updateStatus(AppState::Home, "Ready", true);
     } else if (event.id == ButtonId::Back) {
@@ -348,15 +361,20 @@ static void communicationTask(void*) {
             gStatus.sample.hx711Ready ? "true" : "false", gStatus.sample.pressureKpa);
           if (gStatus.sample.hx711Ready && isfinite(gStatus.sample.lipForce)) Serial.print(gStatus.sample.lipForce, 2);
           else Serial.print("null");
-          Serial.printf(",\"emg\":%.2f,\"wifi\":%s}\n", gStatus.sample.emgFiltered,
-            gStatus.wifiConnected ? "true" : "false");
+          Serial.printf(",\"emg\":%.2f,\"wifi\":%s,\"paired\":%s,\"device_id\":\"%s\"}\n",
+            gStatus.sample.emgFiltered, gStatus.wifiConnected ? "true" : "false",
+            gStatus.devicePaired ? "true" : "false", gStatus.deviceId);
           xSemaphoreGive(gStatusMutex);
         } else if (line == "results") storage.listResults(Serial);
         else if (line == "wifi_setup") {
           const WifiCommand command{WifiCommandType::StartPortal};
           xQueueSend(gWifiCommandQueue, &command, 0);
           Serial.println("{\"wifi_portal\":\"starting\"}");
-        } else if (line == "help") Serial.println("commands: help, status, results, wifi_setup");
+        } else if (line == "pair_device") {
+          const WifiCommand command{WifiCommandType::StartPairing};
+          xQueueSend(gWifiCommandQueue, &command, 0);
+          Serial.println("{\"pairing\":\"starting\"}");
+        } else if (line == "help") Serial.println("commands: help, status, results, wifi_setup, pair_device");
         else Serial.println("{\"error\":\"unknown command\"}");
         line = "";
       } else if (c != '\r' && line.length() < 96) line += c;
@@ -372,13 +390,20 @@ static void wifiTask(void*) {
   uint32_t lastCheck = 0;
   uint32_t lastHeartbeat = 0;
   bool wasConnected = false;
+  bool timeConfigured = false;
 
   for (;;) {
     if (millis() - lastCheck >= 1000) {
       lastCheck = millis();
       const bool connected = WiFi.status() == WL_CONNECTED;
       setWifiConnected(connected);
-      if (connected && !wasConnected) enqueueSyncEvent("online", "wifi");
+      if (connected && !wasConnected) {
+        enqueueSyncEvent("online", "wifi");
+        if (!timeConfigured) {
+          configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+          timeConfigured = true;
+        }
+      }
       if (connected && millis() - lastHeartbeat >= 15000) {
         lastHeartbeat = millis();
         enqueueSyncEvent("online", "heartbeat");
@@ -393,18 +418,57 @@ static void wifiTask(void*) {
       continue;
     }
 
+    if (command.type == WifiCommandType::StartPairing) {
+      if (WiFi.status() != WL_CONNECTED) {
+        updateStatus(AppState::DevicePairing, "Connect WiFi before pairing");
+        continue;
+      }
+      String pairingCode;
+      if (!deviceApi.startPairing(pairingCode)) {
+        updateStatus(AppState::DevicePairing, "Pairing request failed");
+        continue;
+      }
+      xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+      strlcpy(gStatus.pairingCode, pairingCode.c_str(), sizeof(gStatus.pairingCode));
+      strlcpy(gStatus.message, "Enter code in dashboard", sizeof(gStatus.message));
+      xSemaphoreGive(gStatusMutex);
+      Serial.printf("{\"pairing_code\":\"%s\",\"device_id\":\"%s\"}\n",
+                    pairingCode.c_str(), deviceApi.deviceId());
+      for (;;) {
+        String pairingStatus;
+        if (deviceApi.pollPairing(pairingStatus)) {
+          if (pairingStatus == "claimed") {
+            xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+            gStatus.devicePaired = true;
+            gStatus.pairingCode[0] = '\0';
+            xSemaphoreGive(gStatusMutex);
+            updateStatus(AppState::Home, "Device registered", true);
+            enqueueSyncEvent("online", "paired");
+            break;
+          }
+          if (pairingStatus == "expired") {
+            updateStatus(AppState::DevicePairing, "Pairing code expired");
+            break;
+          }
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+      }
+      continue;
+    }
+
     xEventGroupSetBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
     updateStatus(AppState::Settings, "AP: TongueSmart-Setup");
     WiFiManager manager;
-    WiFiManagerParameter apiParameter("api_url", "API event URL", apiUrl, sizeof(apiUrl) - 1);
+    char configuredBase[160]{};
+    strlcpy(configuredBase, deviceApi.baseUrl(), sizeof(configuredBase));
+    WiFiManagerParameter apiParameter("api_base", "API base URL", configuredBase, sizeof(configuredBase) - 1);
     manager.addParameter(&apiParameter);
     manager.setConfigPortalTimeout(180);
     manager.setConnectTimeout(20);
     const bool connected = manager.startConfigPortal("TongueSmart-Setup");
     const char* configuredUrl = apiParameter.getValue();
     if (configuredUrl && configuredUrl[0] != '\0') {
-      strlcpy(apiUrl, configuredUrl, sizeof(apiUrl));
-      preferences.putString("api_url", apiUrl);
+      deviceApi.setBaseUrl(configuredUrl);
     }
     setWifiConnected(connected && WiFi.status() == WL_CONNECTED);
     xEventGroupClearBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
@@ -413,36 +477,97 @@ static void wifiTask(void*) {
 }
 
 static bool postSyncEvent(const SyncEvent& sync) {
-  if (WiFi.status() != WL_CONNECTED || apiUrl[0] == '\0') return false;
-  HTTPClient http;
-  if (!http.begin(apiUrl)) return false;
-  http.addHeader("Content-Type", "application/json");
-  JsonDocument body;
-  body["schema_version"] = 1;
-  body["message_id"] = sync.messageId;
-  body["device_id"] = cfg::DEVICE_ID;
-  body["event"] = sync.event;
-  body["firmware_version"] = cfg::FIRMWARE_VERSION;
-  body["uptime_ms"] = sync.uptimeMs;
-  String payload;
-  serializeJson(body, payload);
-  const int code = http.POST(payload);
-  http.end();
-  return code >= 200 && code < 300;
+  return deviceApi.postEvent(sync.event, sync.messageId, sync.uptimeMs);
+}
+
+static void utcTimestamp(char* destination, size_t size) {
+  const time_t now = time(nullptr);
+  struct tm utc{};
+  gmtime_r(&now, &utc);
+  if (now < 1700000000) {
+    snprintf(destination, size, "2026-01-01T00:00:00.%03luZ",
+             static_cast<unsigned long>(millis() % 1000));
+    return;
+  }
+  char seconds[24]{};
+  strftime(seconds, sizeof(seconds), "%Y-%m-%dT%H:%M:%S", &utc);
+  snprintf(destination, size, "%s.%03luZ", seconds,
+           static_cast<unsigned long>(millis() % 1000));
 }
 
 static void syncTask(void*) {
   SyncEvent sync{};
   uint32_t retryMs = 1000;
+  uint32_t lastControlPoll = 0;
+  uint32_t lastRemoteSample = 0;
+  uint32_t sequence = 0;
+  RemoteSessionControl control{};
+  RemoteSample batch[cfg::REMOTE_BATCH_SAMPLES]{};
+  size_t batchCount = 0;
+  char activeSession[40]{};
+  char activeMeasurement[24]{};
   for (;;) {
-    if (xQueuePeek(gSyncQueue, &sync, pdMS_TO_TICKS(500)) != pdTRUE) continue;
-    if (postSyncEvent(sync)) {
-      xQueueReceive(gSyncQueue, &sync, 0);
-      retryMs = 1000;
-    } else {
-      vTaskDelay(pdMS_TO_TICKS(retryMs));
-      retryMs = min<uint32_t>(retryMs * 2, 30000);
+    if (xQueuePeek(gSyncQueue, &sync, 0) == pdTRUE) {
+      if (postSyncEvent(sync)) {
+        xQueueReceive(gSyncQueue, &sync, 0);
+        retryMs = 1000;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(retryMs));
+        retryMs = min<uint32_t>(retryMs * 2, 30000);
+      }
     }
+
+    if (deviceApi.isPaired() && WiFi.status() == WL_CONNECTED &&
+        millis() - lastControlPoll >= cfg::CONTROL_POLL_MS) {
+      lastControlPoll = millis();
+      RemoteSessionControl next{};
+      if (deviceApi.fetchActiveControl(next)) {
+        const bool changed = strcmp(activeSession, next.sessionId) != 0 ||
+                             strcmp(activeMeasurement, next.measurement) != 0;
+        control = next;
+        if (changed) {
+          strlcpy(activeSession, control.sessionId, sizeof(activeSession));
+          strlcpy(activeMeasurement, control.measurement, sizeof(activeMeasurement));
+          sequence = control.nextSequence;
+          batchCount = 0;
+        } else if (batchCount == 0) {
+          sequence = control.nextSequence;
+        }
+      }
+    }
+
+    if (!control.acquisitionEnabled) {
+      batchCount = 0;
+    } else if (millis() - lastRemoteSample >= cfg::REMOTE_SAMPLE_MS) {
+      lastRemoteSample = millis();
+      SensorSample sample{};
+      xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+      sample = gStatus.sample;
+      xSemaphoreGive(gStatusMutex);
+      RemoteSample& point = batch[batchCount++];
+      utcTimestamp(point.timestamp, sizeof(point.timestamp));
+      if (strcmp(control.measurement, "emg") == 0) {
+        point.rawValue = sample.emgRaw;
+        point.calibratedValue = sample.emgFiltered;
+      } else if (strcmp(control.measurement, "lip_force") == 0) {
+        point.rawValue = sample.lipForce;
+        point.calibratedValue = sample.lipForce;
+      } else {
+        point.rawValue = sample.fsrRaw;
+        point.calibratedValue = sample.pressureKpa;
+      }
+    }
+
+    if (batchCount == cfg::REMOTE_BATCH_SAMPLES) {
+      uint32_t acknowledged = sequence;
+      if (deviceApi.sendBatch(control, batch, batchCount, sequence, acknowledged)) {
+        sequence = acknowledged + 1;
+        batchCount = 0;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -461,8 +586,9 @@ void setup() {
   gStatus.state = AppState::Boot;
   strlcpy(gStatus.message, "Starting...", sizeof(gStatus.message));
   preferences.begin("tongue-smart", false);
-  const String savedApiUrl = preferences.getString("api_url", cfg::DEFAULT_API_URL);
-  strlcpy(apiUrl, savedApiUrl.c_str(), sizeof(apiUrl));
+  deviceApi.begin(preferences);
+  gStatus.devicePaired = deviceApi.isPaired();
+  strlcpy(gStatus.deviceId, deviceApi.deviceId(), sizeof(gStatus.deviceId));
   enqueueSyncEvent("boot", "boot");
 
   xTaskCreatePinnedToCore(sensorTask, "sensor", 4096, nullptr, 5, nullptr, 0);

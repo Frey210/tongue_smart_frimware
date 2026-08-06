@@ -67,7 +67,7 @@ Firmware ESP32-S3 yang deterministic, offline-first, dan dapat menyelesaikan wor
 {
   "type": "hello",
   "schema_version": 1,
-  "device_id": "tongue-smart-v3",
+  "device_id": "TS-<eFuse MAC>",
   "hardware_revision": "unknown",
   "capabilities": {
     "emg_channels": 1,

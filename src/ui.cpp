@@ -38,6 +38,7 @@ const char* UserInterface::stateName(AppState s) {
     case AppState::Saving: return "SAVING";
     case AppState::History: return "HISTORY";
     case AppState::Settings: return "SETTINGS";
+    case AppState::DevicePairing: return "PAIR DEVICE";
     case AppState::About: return "ABOUT";
     case AppState::Error: return "SENSOR ERROR";
     case AppState::Recovery: return "RECOVERY";
@@ -84,7 +85,7 @@ void UserInterface::drawHome(const SharedStatus& s) {
   tft_.drawString("DEVICE READY", 18, 54, 2);
   tft_.setTextDatum(MR_DATUM);
   tft_.setTextColor(MUTED, BG);
-  tft_.drawString(s.wifiConnected ? "Storage: OK   WiFi" : "Storage: OK   Offline", 302, 54, 2);
+  tft_.drawString(s.wifiConnected ? (s.devicePaired ? "WiFi   Paired" : "WiFi   Unpaired") : "Storage: OK   Offline", 302, 54, 2);
   static const char* items[] = {"Start Examination", "History", "Calibration", "Settings", "About"};
   drawMenu(items, 5, s.menuIndex, 78);
 }
@@ -97,6 +98,29 @@ void UserInterface::drawExamMenu(const SharedStatus& s) {
   drawMenu(items, 4, s.menuIndex, 78);
   tft_.setTextColor(MUTED, BG);
   tft_.drawString("BACK  Return", 18, 218, 2);
+}
+
+void UserInterface::drawSettings(const SharedStatus& s) {
+  tft_.setTextDatum(ML_DATUM);
+  tft_.setTextColor(TFT_WHITE, BG);
+  tft_.drawString("Connectivity", 18, 55, 2);
+  static const char* items[] = {"WiFi Setup Portal", "Register Device"};
+  drawMenu(items, 2, s.menuIndex, 82);
+  tft_.setTextColor(MUTED, BG);
+  tft_.drawString(s.devicePaired ? s.deviceId : "Device not registered", 18, 170, 2);
+  tft_.drawString("BACK  Return", 18, 218, 2);
+}
+
+void UserInterface::drawPairing(const SharedStatus& s) {
+  tft_.setTextDatum(MC_DATUM);
+  tft_.setTextColor(TFT_CYAN, BG);
+  tft_.drawString("REGISTER DEVICE", 160, 61, 4);
+  tft_.setTextColor(TFT_WHITE, BG);
+  tft_.drawString(s.pairingCode[0] ? s.pairingCode : "REQUESTING...", 160, 112, 4);
+  tft_.setTextColor(MUTED, BG);
+  tft_.drawString(s.message, 160, 151, 2);
+  tft_.drawString(s.deviceId, 160, 180, 2);
+  tft_.drawString("BACK  Return", 160, 218, 2);
 }
 
 void UserInterface::drawMessage(const SharedStatus& s, const char* title) {
@@ -163,7 +187,7 @@ void UserInterface::drawResult(const SharedStatus& s) {
 
 void UserInterface::render(const SharedStatus& s) {
   const bool pageChanged = s.state != lastState_ ||
-      ((s.state == AppState::Home || s.state == AppState::ExaminationMenu) &&
+      ((s.state == AppState::Home || s.state == AppState::ExaminationMenu || s.state == AppState::Settings) &&
        s.menuIndex != lastMenuIndex_);
   if (pageChanged) {
     drawFrame(s);
@@ -179,12 +203,18 @@ void UserInterface::render(const SharedStatus& s) {
     else if (s.state == AppState::Result) drawResult(s);
     else if (s.state == AppState::Error) drawMessage(s, "SENSOR ERROR");
     else if (s.state == AppState::History) drawMessage(s, "HISTORY");
-    else if (s.state == AppState::Settings) drawMessage(s, "SETTINGS");
+    else if (s.state == AppState::Settings) drawSettings(s);
+    else if (s.state == AppState::DevicePairing) drawPairing(s);
     else if (s.state == AppState::About) drawMessage(s, "TONGUE SMART v3");
   }
   if (s.state == AppState::Measurement && millis() - lastValuesDraw_ >= 250) {
     lastValuesDraw_ = millis();
     drawFrame(s);
     drawMeasurement(s);
+  }
+  if (s.state == AppState::DevicePairing && millis() - lastValuesDraw_ >= 500) {
+    lastValuesDraw_ = millis();
+    drawFrame(s);
+    drawPairing(s);
   }
 }

@@ -2,7 +2,17 @@
 
 Target produksi: `https://tongue-smart.farlabs.my.id/api/v1`.
 
-Secret perangkat tidak boleh ditulis ke repository. Nilai `X-Device-Key` nantinya dimasukkan melalui proses provisioning/NVS dan tercatat di register kredensial lokal proyek.
+Secret perangkat tidak boleh ditulis ke repository. Firmware membuat secret unik saat inisialisasi, menyimpannya di NVS, dan memakainya sebagai `X-Device-Key` setelah pairing berhasil.
+
+## Pairing
+
+Firmware membentuk `device_id` dan hardware UID dari eFuse MAC, membuat secret acak 256-bit, lalu menyimpannya di NVS. Secret dikirim satu kali melalui HTTPS saat meminta pairing:
+
+```http
+POST /device/pairings
+```
+
+LCD menampilkan pairing code selama 10 menit. Setelah admin/operator melakukan claim, firmware melakukan polling `GET /device/pairings/{token}` dan mengaktifkan credential lokal saat status menjadi `claimed`.
 
 ## Siklus sesi
 
@@ -19,6 +29,7 @@ Perangkat/simulator mengambil sesi aktif melalui:
 
 ```http
 GET /device/sessions/active?device_id=tongue-smart-v3
+X-Device-ID: <device_id dari eFuse/NVS>
 X-Device-Key: <secret dari NVS>
 ```
 
@@ -28,6 +39,7 @@ Respons membawa `control` terbaru: `measurement`, `phase`, `protocol_stage`, dan
 
 ```http
 POST /sessions/{session_id}/batches
+X-Device-ID: <device_id dari eFuse/NVS>
 X-Device-Key: <secret dari NVS>
 Content-Type: application/json
 ```
@@ -45,6 +57,7 @@ Respons `202` berisi `receipt_id`, `duplicate`, `sequence`, dan `received_at`. R
 ## Keamanan
 
 - HTTPS wajib untuk hostname publik.
+- Build prototipe v0.3.0 masih memakai `setInsecure()`; pin CA/certificate bundle wajib sebelum validasi klinis.
 - Jangan log atau tampilkan device key pada serial monitor/LCD.
 - Emergency stop, motor interlock, dan keputusan keselamatan tetap lokal.
 - Upload firmware ditunda sampai kontrak dan uji host selesai.

@@ -14,6 +14,8 @@ class UserInterface {
   void drawFrame(const SharedStatus& status);
   void drawHome(const SharedStatus& status);
   void drawExamMenu(const SharedStatus& status);
+  void drawSettings(const SharedStatus& status);
+  void drawPairing(const SharedStatus& status);
   void drawMessage(const SharedStatus& status, const char* title);
   void drawMeasurement(const SharedStatus& status);
   void drawResult(const SharedStatus& status);

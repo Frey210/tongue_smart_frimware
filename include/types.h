@@ -4,12 +4,12 @@
 enum class AppState : uint8_t {
   Boot, SelfTest, Home, ExaminationMenu, PatientReady, Calibration,
   Countdown, Measurement, Processing, Result, Saving, History,
-  Settings, About, Error, Recovery
+  Settings, DevicePairing, About, Error, Recovery
 };
 enum class ExaminationType : uint8_t { TonguePressure, LipForce, Emg, Complete };
 enum class ButtonId : uint8_t { Up, Down, Ok, Back };
 enum class SensorCommandType : uint8_t { TareHx711 };
-enum class WifiCommandType : uint8_t { StartPortal, Disconnect };
+enum class WifiCommandType : uint8_t { StartPortal, StartPairing, Disconnect };
 
 struct SensorSample {
   uint32_t timestampMs;
@@ -44,9 +44,12 @@ struct SharedStatus {
   uint8_t countdown;
   uint8_t progress;
   bool wifiConnected;
+  bool devicePaired;
   SensorSample sample;
   ExaminationResult result;
   char message[64];
+  char deviceId[32];
+  char pairingCode[16];
 };
 
 extern QueueHandle_t gSensorQueue;
