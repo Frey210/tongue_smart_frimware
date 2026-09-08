@@ -17,7 +17,7 @@ constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.4.1";
+constexpr char FIRMWARE_VERSION[] = "0.4.2";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline
@@ -40,4 +40,5 @@ constexpr float HX711_COUNTS_PER_NEWTON = 1.0F; // MUST be calibrated with a kno
 constexpr long HX711_OFFSET = 0;
 constexpr float FSR_ZERO_ADC = 0.0F;
 constexpr float FSR_KPA_PER_COUNT = 100.0F / ADC_MAX_COUNT; // Replace with fitted sensor calibration
+constexpr uint16_t ADC_SATURATION_COUNT = 4090;
 }

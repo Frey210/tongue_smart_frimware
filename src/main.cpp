@@ -91,6 +91,7 @@ static void sensorTask(void*) {
     emgEma += cfg::EMG_ENVELOPE_ALPHA * (emgUv - emgEma);
     sample.emgMicrovolts = isfinite(emgEma) ? emgEma : 0;
     sample.pressureKpa = max(0.0F, (static_cast<float>(sample.fsrRaw) - cfg::FSR_ZERO_ADC) * cfg::FSR_KPA_PER_COUNT);
+    sample.fsrSaturated = sample.fsrRaw >= cfg::ADC_SATURATION_COUNT;
     sample.hx711Ready = scale.is_ready();
     sample.lipForce = 0;
     if (sample.hx711Ready) {
@@ -385,9 +386,10 @@ static void communicationTask(void*) {
         line.trim();
         if (line == "status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
-          Serial.printf("{\"state\":%u,\"exam\":%u,\"sensor_ready\":%s,\"pressure_kpa\":%.2f,\"lip_force\":",
+          Serial.printf("{\"state\":%u,\"exam\":%u,\"sensor_ready\":%s,\"fsr_adc\":%u,\"fsr_saturated\":%s,\"pressure_kpa\":%.2f,\"lip_force\":",
             static_cast<unsigned>(gStatus.state), static_cast<unsigned>(gStatus.examination),
-            gStatus.sample.hx711Ready ? "true" : "false", gStatus.sample.pressureKpa);
+            gStatus.sample.hx711Ready ? "true" : "false", gStatus.sample.fsrRaw,
+            gStatus.sample.fsrSaturated ? "true" : "false", gStatus.sample.pressureKpa);
           if (gStatus.sample.hx711Ready && isfinite(gStatus.sample.lipForce)) Serial.print(gStatus.sample.lipForce, 2);
           else Serial.print("null");
           Serial.printf(",\"emg\":%.2f,\"wifi\":%s,\"paired\":%s,\"device_id\":\"%s\"}\n",
@@ -514,13 +516,13 @@ static void utcTimestamp(char* destination, size_t size) {
   struct tm utc{};
   gmtime_r(&now, &utc);
   if (now < 1700000000) {
-    snprintf(destination, size, "2026-01-01T00:00:00.%03luZ",
+    snprintf(destination, size, "2026-01-01T00:00:00.%03lu000Z",
              static_cast<unsigned long>(millis() % 1000));
     return;
   }
   char seconds[24]{};
   strftime(seconds, sizeof(seconds), "%Y-%m-%dT%H:%M:%S", &utc);
-  snprintf(destination, size, "%s.%03luZ", seconds,
+  snprintf(destination, size, "%s.%03lu000Z", seconds,
            static_cast<unsigned long>(millis() % 1000));
 }
 
@@ -567,7 +569,8 @@ static void syncTask(void*) {
 
     if (!control.acquisitionEnabled) {
       batchCount = 0;
-    } else if (millis() - lastRemoteSample >= cfg::REMOTE_SAMPLE_MS) {
+    } else if (batchCount < cfg::REMOTE_BATCH_SAMPLES &&
+               millis() - lastRemoteSample >= cfg::REMOTE_SAMPLE_MS) {
       lastRemoteSample = millis();
       SensorSample sample{};
       xSemaphoreTake(gStatusMutex, portMAX_DELAY);
@@ -578,16 +581,19 @@ static void syncTask(void*) {
       if (strcmp(control.measurement, "emg") == 0) {
         point.rawValue = sample.emgRaw;
         point.calibratedValue = sample.emgMicrovolts;
+        point.signalValid = sample.emgRaw > 5 && sample.emgRaw < cfg::ADC_SATURATION_COUNT;
       } else if (strcmp(control.measurement, "lip_force") == 0) {
         point.rawValue = sample.lipForce;
         point.calibratedValue = sample.lipForce;
+        point.signalValid = sample.hx711Ready;
       } else {
         point.rawValue = sample.fsrRaw;
         point.calibratedValue = sample.pressureKpa;
+        point.signalValid = !sample.fsrSaturated;
       }
     }
 
-    if (batchCount == cfg::REMOTE_BATCH_SAMPLES) {
+    if (batchCount >= cfg::REMOTE_BATCH_SAMPLES) {
       uint32_t acknowledged = sequence;
       if (deviceApi.sendBatch(control, batch, batchCount, sequence, acknowledged)) {
         sequence = acknowledged + 1;

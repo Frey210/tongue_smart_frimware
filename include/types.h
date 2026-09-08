@@ -19,6 +19,7 @@ struct SensorSample {
   float pressureKpa;
   float lipForce;
   bool hx711Ready;
+  bool fsrSaturated;
 };
 
 struct ButtonEvent { ButtonId id; uint32_t timestampMs; };

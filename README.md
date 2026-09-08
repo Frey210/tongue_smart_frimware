@@ -51,3 +51,5 @@ Sebelum dipakai secara klinis, tentukan dan validasi:
 6. target akurasi, prosedur kalibrasi, serta acceptance test perangkat.
 
 Build saat ini menggunakan TLS terenkripsi tetapi verifikasi CA masih dinonaktifkan untuk prototipe Phase 1. Root CA harus dipin atau memakai certificate bundle sebelum validasi klinis. Baseline ini bukan perangkat medis tervalidasi dan tidak boleh menghasilkan keputusan klinis sebelum proses verifikasi tersebut selesai.
+
+Skala FSR bawaan masih berupa placeholder linear: ADC 0–4095 dipetakan ke 0–100 kPa. Pembacaan ADC ≥4090 ditampilkan sebagai saturasi (`>100.0`) dan dikirim dengan kualitas `invalid`; nilai di atas rentang ADC tidak dapat ditaksir sampai rangkaian dan kurva kalibrasi FSR divalidasi.

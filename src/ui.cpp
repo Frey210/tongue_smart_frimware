@@ -148,9 +148,11 @@ void UserInterface::drawMeasurement(const SharedStatus& s) {
   char value[24] = "---";
   const char* unit = "";
   float current = NAN;
+  bool saturated = false;
   if (s.examination == ExaminationType::TonguePressure) {
     current = s.sample.pressureKpa;
-    if (isfinite(current)) snprintf(value, sizeof(value), "%.1f", current);
+    saturated = s.sample.fsrSaturated;
+    if (isfinite(current)) snprintf(value, sizeof(value), saturated ? ">%.1f" : "%.1f", current);
     unit = "kPa";
   } else if (s.examination == ExaminationType::LipForce) {
     current = s.sample.hx711Ready ? s.sample.lipForce : NAN;
@@ -171,7 +173,7 @@ void UserInterface::drawMeasurement(const SharedStatus& s) {
   }
 
   tft_.setTextDatum(MR_DATUM);
-  tft_.setTextColor(TFT_WHITE, BG);
+  tft_.setTextColor(saturated ? TFT_ORANGE : TFT_WHITE, BG);
   tft_.drawString(value, 272, 51, 4);
   tft_.setTextColor(MUTED, BG);
   tft_.drawString(unit, 307, 51, 2);
@@ -229,7 +231,7 @@ void UserInterface::drawResult(const SharedStatus& s) {
   tft_.setTextColor(TFT_WHITE, BG);
   tft_.drawString(line, 160, 125, 4);
   tft_.setTextColor(MUTED, BG);
-  tft_.drawString("Saved Local  |  Pending Sync", 160, 165, 2);
+  tft_.drawString(s.wifiConnected && s.devicePaired ? "Saved Local  |  HTTPS Connected" : "Saved Local  |  Offline", 160, 165, 2);
   tft_.drawString("OK  Return to Home", 160, 210, 2);
 }
 

@@ -198,7 +198,7 @@ bool DeviceApi::sendBatch(const RemoteSessionControl& control, const RemoteSampl
     item["protocol_stage"] = stage;
     item["raw_value"] = serialized(canonicalFloat(samples[i].rawValue));
     item["sensor_channel"] = channel;
-    item["signal_quality"] = "good";
+    item["signal_quality"] = samples[i].signalValid ? "good" : "invalid";
     item["timestamp"] = samples[i].timestamp;
   }
   String canonicalSamples;
@@ -217,7 +217,11 @@ bool DeviceApi::sendBatch(const RemoteSessionControl& control, const RemoteSampl
   String payload;
   serializeJson(body, payload);
   String response;
-  if (request("POST", String("/sessions/") + control.sessionId + "/batches", &payload, response, true) != 202) return false;
+  const int code = request("POST", String("/sessions/") + control.sessionId + "/batches", &payload, response, true);
+  if (code != 202) {
+    Serial.printf("{\"sync_error\":%d,\"response\":%s}\n", code, response.c_str());
+    return false;
+  }
   JsonDocument decoded;
   if (deserializeJson(decoded, response)) return false;
   acknowledgedSequence = decoded["sequence"] | sequence;

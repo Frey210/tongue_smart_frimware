@@ -19,6 +19,7 @@ struct RemoteSample {
   char timestamp[32]{};
   float rawValue = 0;
   float calibratedValue = 0;
+  bool signalValid = true;
 };
 
 class DeviceApi {
