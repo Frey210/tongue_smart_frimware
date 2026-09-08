@@ -27,6 +27,7 @@ struct MotorCommand { long targetSteps; float maxSpeed; float acceleration; };
 struct SensorCommand { SensorCommandType type; };
 struct WifiCommand { WifiCommandType type; };
 struct SyncEvent { char event[24]; char messageId[64]; uint32_t uptimeMs; };
+struct RemoteMeasurementCommand { ExaminationType type; bool start; };
 
 struct ExaminationResult {
   char id[40];
@@ -46,6 +47,7 @@ struct SharedStatus {
   uint8_t progress;
   bool wifiConnected;
   bool devicePaired;
+  bool remoteControlled;
   SensorSample sample;
   ExaminationResult result;
   char message[64];
@@ -60,6 +62,7 @@ extern QueueHandle_t gStorageQueue;
 extern QueueHandle_t gSensorCommandQueue;
 extern QueueHandle_t gWifiCommandQueue;
 extern QueueHandle_t gSyncQueue;
+extern QueueHandle_t gRemoteMeasurementQueue;
 extern EventGroupHandle_t gSystemEvents;
 extern SemaphoreHandle_t gStatusMutex;
 extern SharedStatus gStatus;

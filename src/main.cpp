@@ -14,7 +14,8 @@
 #include "types.h"
 #include "ui.h"
 
-QueueHandle_t gSensorQueue, gButtonQueue, gMotorQueue, gStorageQueue, gSensorCommandQueue, gWifiCommandQueue, gSyncQueue;
+QueueHandle_t gSensorQueue, gButtonQueue, gMotorQueue, gStorageQueue, gSensorCommandQueue, gWifiCommandQueue, gSyncQueue,
+    gRemoteMeasurementQueue;
 EventGroupHandle_t gSystemEvents;
 SemaphoreHandle_t gStatusMutex;
 SharedStatus gStatus{};
@@ -227,9 +228,9 @@ static bool calibrateLipForce() {
   return true;
 }
 
-static void runMeasurement(ExaminationType type) {
+static void runMeasurement(ExaminationType type, bool remoteControlled = false) {
   if (type == ExaminationType::LipForce && !calibrateLipForce()) return;
-  if (!countdown()) return;
+  if (!remoteControlled && !countdown()) return;
 
   ExaminationResult result{};
   const uint32_t started = millis();
@@ -238,6 +239,7 @@ static void runMeasurement(ExaminationType type) {
   const long lipForceStartPosition = stepper.currentPosition();
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.examination = type;
+  gStatus.remoteControlled = remoteControlled;
   gStatus.progress = 0;
   xSemaphoreGive(gStatusMutex);
   updateStatus(AppState::Measurement, "Measuring");
@@ -253,11 +255,13 @@ static void runMeasurement(ExaminationType type) {
   SensorSample sample{};
   ButtonEvent button{};
   bool cancelled = false;
-  while (millis() - started < cfg::EXAM_DURATION_MS) {
+  while (type != ExaminationType::LipForce || millis() - started < cfg::EXAM_DURATION_MS) {
     if (xQueueReceive(gSensorQueue, &sample, pdMS_TO_TICKS(20)) == pdTRUE) {
       xSemaphoreTake(gStatusMutex, portMAX_DELAY);
       gStatus.sample = sample;
-      gStatus.progress = min<uint32_t>(100, ((millis() - started) * 100) / cfg::EXAM_DURATION_MS);
+      gStatus.progress = type == ExaminationType::LipForce
+          ? min<uint32_t>(100, ((millis() - started) * 100) / cfg::EXAM_DURATION_MS)
+          : 0;
       xSemaphoreGive(gStatusMutex);
       if (type == ExaminationType::TonguePressure && isfinite(sample.pressureKpa))
         result.peakPressureKpa = max(result.peakPressureKpa, sample.pressureKpa);
@@ -267,9 +271,21 @@ static void runMeasurement(ExaminationType type) {
         emgSum += sample.emgMicrovolts;
       ++result.sampleCount;
     }
-    if (xQueueReceive(gButtonQueue, &button, 0) == pdTRUE && button.id == ButtonId::Back) {
-      cancelled = true;
-      break;
+    RemoteMeasurementCommand remote{};
+    if (remoteControlled && xQueueReceive(gRemoteMeasurementQueue, &remote, 0) == pdTRUE) {
+      if (!remote.start) break;
+      if (remote.type != type) {
+        xQueueSendToFront(gRemoteMeasurementQueue, &remote, 0);
+        break;
+      }
+    }
+    if (xQueueReceive(gButtonQueue, &button, 0) == pdTRUE) {
+      if (type != ExaminationType::LipForce && !remoteControlled &&
+          (button.id == ButtonId::Ok || button.id == ButtonId::Back)) break;
+      if (button.id == ButtonId::Back) {
+        cancelled = true;
+        break;
+      }
     }
   }
   if (type == ExaminationType::LipForce) {
@@ -289,6 +305,9 @@ static void runMeasurement(ExaminationType type) {
     stopMotor();
   }
   if (cancelled) {
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    gStatus.remoteControlled = false;
+    xSemaphoreGive(gStatusMutex);
     updateStatus(AppState::Home, "Measurement cancelled", true);
     return;
   }
@@ -305,6 +324,9 @@ static void runMeasurement(ExaminationType type) {
   xQueueSend(gStorageQueue, &result, portMAX_DELAY);
   vTaskDelay(pdMS_TO_TICKS(250));
   updateStatus(AppState::Result, "Saved locally");
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.remoteControlled = false;
+  xSemaphoreGive(gStatusMutex);
 }
 
 static void appTask(void*) {
@@ -316,6 +338,11 @@ static void appTask(void*) {
 
   ButtonEvent event{};
   for (;;) {
+    RemoteMeasurementCommand remote{};
+    if (xQueueReceive(gRemoteMeasurementQueue, &remote, 0) == pdTRUE) {
+      if (remote.start) runMeasurement(remote.type, true);
+      continue;
+    }
     if (xQueueReceive(gButtonQueue, &event, pdMS_TO_TICKS(50)) != pdTRUE) continue;
     AppState state;
     uint8_t index;
@@ -555,12 +582,26 @@ static void syncTask(void*) {
         millis() - lastControlPoll >= cfg::CONTROL_POLL_MS) {
       RemoteSessionControl next{};
       if (deviceApi.fetchActiveControl(next)) {
+        const bool wasEnabled = control.acquisitionEnabled;
+        const bool sourceChanged = strcmp(activeSession, next.sessionId) != 0 ||
+                                   strcmp(activeMeasurement, next.measurement) != 0;
         const bool changed = strcmp(activeSession, next.sessionId) != 0 ||
                              strcmp(activeMeasurement, next.measurement) != 0 ||
                              strcmp(activePhase, next.phase) != 0 ||
                              strcmp(activeStage, next.protocolStage) != 0 ||
                              strcmp(activeFsrPoint, next.fsrPoint) != 0;
         control = next;
+        if (control.acquisitionEnabled && (!wasEnabled || sourceChanged)) {
+          const ExaminationType type = strcmp(control.measurement, "emg") == 0
+              ? ExaminationType::Emg
+              : strcmp(control.measurement, "lip_force") == 0
+                  ? ExaminationType::LipForce : ExaminationType::TonguePressure;
+          const RemoteMeasurementCommand command{type, true};
+          xQueueSend(gRemoteMeasurementQueue, &command, 0);
+        } else if (!control.acquisitionEnabled && wasEnabled) {
+          const RemoteMeasurementCommand command{ExaminationType::TonguePressure, false};
+          xQueueSend(gRemoteMeasurementQueue, &command, 0);
+        }
         if (changed) {
           strlcpy(activeSession, control.sessionId, sizeof(activeSession));
           strlcpy(activeMeasurement, control.measurement, sizeof(activeMeasurement));
@@ -629,6 +670,7 @@ void setup() {
   gSensorCommandQueue = xQueueCreate(2, sizeof(SensorCommand));
   gWifiCommandQueue = xQueueCreate(2, sizeof(WifiCommand));
   gSyncQueue = xQueueCreate(8, sizeof(SyncEvent));
+  gRemoteMeasurementQueue = xQueueCreate(4, sizeof(RemoteMeasurementCommand));
   gSystemEvents = xEventGroupCreate();
   gStatusMutex = xSemaphoreCreateMutex();
   gStatus.state = AppState::Boot;

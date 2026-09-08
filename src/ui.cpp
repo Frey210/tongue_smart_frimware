@@ -208,11 +208,19 @@ void UserInterface::drawMeasurement(const SharedStatus& s) {
     tft_.drawLine(x1, y1, x2, y2, TFT_CYAN);
   }
 
-  tft_.drawRoundRect(40, 213, 267, 10, 5, TFT_DARKGREY);
-  tft_.fillRoundRect(42, 215, (263 * s.progress) / 100, 6, 3, TFT_GREEN);
   tft_.setTextDatum(ML_DATUM);
   tft_.setTextColor(TFT_GREEN, BG);
   tft_.drawString("LIVE", 5, 218, 1);
+  tft_.setTextDatum(MC_DATUM);
+  tft_.setTextColor(MUTED, BG);
+  if (s.remoteControlled) {
+    tft_.drawString("CONTROLLED FROM WEB", 174, 218, 1);
+  } else if (s.examination == ExaminationType::LipForce) {
+    tft_.drawRoundRect(40, 213, 267, 10, 5, TFT_DARKGREY);
+    tft_.fillRoundRect(42, 215, (263 * s.progress) / 100, 6, 3, TFT_GREEN);
+  } else {
+    tft_.drawString("OK / BACK  STOP & SAVE", 174, 218, 1);
+  }
 }
 
 void UserInterface::drawResult(const SharedStatus& s) {
