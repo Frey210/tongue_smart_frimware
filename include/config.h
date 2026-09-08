@@ -17,7 +17,7 @@ constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.3.2";
+constexpr char FIRMWARE_VERSION[] = "0.3.3";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline
@@ -26,6 +26,10 @@ constexpr uint32_t EXAM_DURATION_MS = 5000;
 constexpr uint32_t CONTROL_POLL_MS = 1500;
 constexpr uint32_t REMOTE_SAMPLE_MS = 100;
 constexpr uint8_t REMOTE_BATCH_SAMPLES = 10;
+constexpr long LIP_FORCE_TRAVEL_STEPS = 2000;
+constexpr float LIP_FORCE_MOTOR_SPEED = 300.0F;
+constexpr float LIP_FORCE_MOTOR_ACCELERATION = 300.0F;
+constexpr uint32_t MOTOR_RETURN_TIMEOUT_MS = 15000;
 constexpr float ADC_MAX_COUNT = 4095.0F;
 constexpr float ADC_REFERENCE_UV = 3300000.0F;
 constexpr float EMG_ADC_BIAS = 2047.5F;      // Tune from the sensor's zero-signal baseline

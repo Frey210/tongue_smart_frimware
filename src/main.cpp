@@ -134,14 +134,23 @@ static void motorTask(void*) {
   stepper.setPinsInverted(hw::STEPPER_DIR_INVERTED, false, false);
   stepper.setMaxSpeed(1000);
   stepper.setAcceleration(500);
+  xEventGroupSetBits(gSystemEvents, EVT_MOTOR_IDLE);
   MotorCommand command{};
+  bool moving = false;
   for (;;) {
     if (xQueueReceive(gMotorQueue, &command, 0) == pdTRUE) {
+      xEventGroupClearBits(gSystemEvents, EVT_MOTOR_IDLE);
       stepper.setMaxSpeed(command.maxSpeed);
       stepper.setAcceleration(command.acceleration);
       stepper.moveTo(command.targetSteps);
+      moving = stepper.distanceToGo() != 0;
+      if (!moving) xEventGroupSetBits(gSystemEvents, EVT_MOTOR_IDLE);
     }
     stepper.run();
+    if (moving && stepper.distanceToGo() == 0) {
+      moving = false;
+      xEventGroupSetBits(gSystemEvents, EVT_MOTOR_IDLE);
+    }
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
@@ -225,6 +234,7 @@ static void runMeasurement(ExaminationType type) {
   const uint32_t started = millis();
   result.startedMs = started;
   float emgSum = 0;
+  const long lipForceStartPosition = stepper.currentPosition();
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.examination = type;
   gStatus.progress = 0;
@@ -234,7 +244,8 @@ static void runMeasurement(ExaminationType type) {
   if (type == ExaminationType::LipForce) {
     // Placeholder speed until steps/mm is calibrated. Movement is only
     // permitted in Measurement and is stopped on completion/BACK.
-    MotorCommand move{stepper.currentPosition() + 2000, 300, 300};
+    MotorCommand move{lipForceStartPosition + cfg::LIP_FORCE_TRAVEL_STEPS,
+                      cfg::LIP_FORCE_MOTOR_SPEED, cfg::LIP_FORCE_MOTOR_ACCELERATION};
     xQueueOverwrite(gMotorQueue, &move);
   }
 
@@ -260,7 +271,22 @@ static void runMeasurement(ExaminationType type) {
       break;
     }
   }
-  stopMotor();
+  if (type == ExaminationType::LipForce) {
+    updateStatus(AppState::Processing, "Returning lip force carriage...");
+    xEventGroupClearBits(gSystemEvents, EVT_MOTOR_IDLE);
+    MotorCommand reset{lipForceStartPosition, cfg::LIP_FORCE_MOTOR_SPEED,
+                       cfg::LIP_FORCE_MOTOR_ACCELERATION};
+    xQueueOverwrite(gMotorQueue, &reset);
+    const EventBits_t motorBits = xEventGroupWaitBits(
+        gSystemEvents, EVT_MOTOR_IDLE, pdFALSE, pdTRUE, pdMS_TO_TICKS(cfg::MOTOR_RETURN_TIMEOUT_MS));
+    if (!(motorBits & EVT_MOTOR_IDLE)) {
+      stopMotor();
+      updateStatus(AppState::Error, "Motor failed to return home");
+      return;
+    }
+  } else {
+    stopMotor();
+  }
   if (cancelled) {
     updateStatus(AppState::Home, "Measurement cancelled", true);
     return;

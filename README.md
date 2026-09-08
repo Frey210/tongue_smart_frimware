@@ -8,6 +8,7 @@ Firmware offline-first berbasis PlatformIO untuk ESP32-S3. Root proyek ini senga
 - State machine boot → self-test → ready → examination → processing → save/result.
 - Sampling sensor EMG (aktivitas dalam uV) dan FSR lidah (tekanan dalam kPa) 100 Hz, serta load cell HX711 (gaya bibir dalam N).
 - UI TFT 320×240, tombol aktif-low dengan debounce, dan stepper non-blocking.
+- Pengukuran gaya bibir otomatis mengembalikan carriage ke posisi awal sebelum sesi selesai.
 - Hasil JSON offline di LittleFS `/results`, selalu diawali status `pending`.
 - USB CDC dengan command `help`, `status`, dan `results`.
 - Device ID unik dari eFuse MAC, secret acak per perangkat, dan credential tersimpan di NVS.

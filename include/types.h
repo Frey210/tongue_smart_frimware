@@ -71,3 +71,4 @@ constexpr EventBits_t EVT_HX_TARE_FAILED = BIT4;
 constexpr EventBits_t EVT_WIFI_CONNECTED = BIT5;
 constexpr EventBits_t EVT_WIFI_PORTAL_ACTIVE = BIT6;
 constexpr EventBits_t EVT_FATAL_ERROR = BIT7;
+constexpr EventBits_t EVT_MOTOR_IDLE = BIT8;
