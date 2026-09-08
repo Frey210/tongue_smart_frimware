@@ -537,6 +537,9 @@ static void syncTask(void*) {
   size_t batchCount = 0;
   char activeSession[40]{};
   char activeMeasurement[24]{};
+  char activePhase[16]{};
+  char activeStage[64]{};
+  char activeFsrPoint[32]{};
   for (;;) {
     if (xQueuePeek(gSyncQueue, &sync, 0) == pdTRUE) {
       if (postSyncEvent(sync)) {
@@ -550,21 +553,31 @@ static void syncTask(void*) {
 
     if (deviceApi.isPaired() && WiFi.status() == WL_CONNECTED &&
         millis() - lastControlPoll >= cfg::CONTROL_POLL_MS) {
-      lastControlPoll = millis();
       RemoteSessionControl next{};
       if (deviceApi.fetchActiveControl(next)) {
         const bool changed = strcmp(activeSession, next.sessionId) != 0 ||
-                             strcmp(activeMeasurement, next.measurement) != 0;
+                             strcmp(activeMeasurement, next.measurement) != 0 ||
+                             strcmp(activePhase, next.phase) != 0 ||
+                             strcmp(activeStage, next.protocolStage) != 0 ||
+                             strcmp(activeFsrPoint, next.fsrPoint) != 0;
         control = next;
         if (changed) {
           strlcpy(activeSession, control.sessionId, sizeof(activeSession));
           strlcpy(activeMeasurement, control.measurement, sizeof(activeMeasurement));
+          strlcpy(activePhase, control.phase, sizeof(activePhase));
+          strlcpy(activeStage, control.protocolStage, sizeof(activeStage));
+          strlcpy(activeFsrPoint, control.fsrPoint, sizeof(activeFsrPoint));
           sequence = control.nextSequence;
           batchCount = 0;
+          Serial.printf("{\"remote_control\":\"%s\",\"phase\":\"%s\",\"stage\":\"%s\"}\n",
+                        control.measurement, control.phase, control.protocolStage);
         } else if (batchCount == 0) {
           sequence = control.nextSequence;
         }
       }
+      // Measure the interval after the blocking HTTPS call, otherwise a slow
+      // handshake causes another poll before samples can fill the batch.
+      lastControlPoll = millis();
     }
 
     if (!control.acquisitionEnabled) {

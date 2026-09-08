@@ -95,14 +95,15 @@ int DeviceApi::request(const char* method, const String& path, const String* bod
   if (WiFi.status() != WL_CONNECTED) return -1;
   const String url = baseUrl_ + path;
   HTTPClient http;
+  http.setReuse(true);
   int code = -1;
   if (url.startsWith("https://")) {
-    WiFiClientSecure client;
+    static WiFiClientSecure client;
     // Phase 1 uses the Cloudflare hostname. Replace with a pinned CA before clinical validation.
     client.setInsecure();
     code = executeHttp(http, client, url, method, body, response, authenticated, deviceId_, deviceSecret_);
   } else {
-    WiFiClient client;
+    static WiFiClient client;
     code = executeHttp(http, client, url, method, body, response, authenticated, deviceId_, deviceSecret_);
   }
   return code;
