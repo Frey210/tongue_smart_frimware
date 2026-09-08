@@ -16,7 +16,7 @@ constexpr uint8_t STEPPER_STEP = 36;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.3.0";
+constexpr char FIRMWARE_VERSION[] = "0.3.1";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline
@@ -25,7 +25,13 @@ constexpr uint32_t EXAM_DURATION_MS = 5000;
 constexpr uint32_t CONTROL_POLL_MS = 1500;
 constexpr uint32_t REMOTE_SAMPLE_MS = 100;
 constexpr uint8_t REMOTE_BATCH_SAMPLES = 10;
-constexpr float HX711_SCALE = 1.0F;         // MUST be calibrated before clinical use
+constexpr float ADC_MAX_COUNT = 4095.0F;
+constexpr float ADC_REFERENCE_UV = 3300000.0F;
+constexpr float EMG_ADC_BIAS = 2047.5F;      // Tune from the sensor's zero-signal baseline
+constexpr float EMG_FRONTEND_GAIN = 1000.0F; // Replace with the measured analog front-end gain
+constexpr float EMG_ENVELOPE_ALPHA = 0.12F;
+constexpr float HX711_COUNTS_PER_NEWTON = 1.0F; // MUST be calibrated with a known force
 constexpr long HX711_OFFSET = 0;
-constexpr float FSR_FULL_SCALE_KPA = 100.0F;
+constexpr float FSR_ZERO_ADC = 0.0F;
+constexpr float FSR_KPA_PER_COUNT = 100.0F / ADC_MAX_COUNT; // Replace with fitted sensor calibration
 }

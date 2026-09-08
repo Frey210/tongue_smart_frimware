@@ -61,7 +61,7 @@ static void sensorTask(void*) {
   analogSetPinAttenuation(hw::EMG_ADC, ADC_11db);
   analogSetPinAttenuation(hw::FSR_ADC, ADC_11db);
   scale.begin(hw::HX711_DT, hw::HX711_SCK);
-  scale.set_scale(cfg::HX711_SCALE);
+  scale.set_scale(cfg::HX711_COUNTS_PER_NEWTON);
   scale.set_offset(cfg::HX711_OFFSET);
   float emgEma = 0;
   TickType_t wake = xTaskGetTickCount();
@@ -86,9 +86,11 @@ static void sensorTask(void*) {
     sample.timestampMs = millis();
     sample.emgRaw = analogRead(hw::EMG_ADC);
     sample.fsrRaw = analogRead(hw::FSR_ADC);
-    emgEma += 0.12F * (static_cast<float>(sample.emgRaw) - emgEma);
-    sample.emgFiltered = isfinite(emgEma) ? emgEma : 0;
-    sample.pressureKpa = (static_cast<float>(sample.fsrRaw) / 4095.0F) * cfg::FSR_FULL_SCALE_KPA;
+    const float emgUv = fabsf(static_cast<float>(sample.emgRaw) - cfg::EMG_ADC_BIAS) *
+                        cfg::ADC_REFERENCE_UV / cfg::ADC_MAX_COUNT / cfg::EMG_FRONTEND_GAIN;
+    emgEma += cfg::EMG_ENVELOPE_ALPHA * (emgUv - emgEma);
+    sample.emgMicrovolts = isfinite(emgEma) ? emgEma : 0;
+    sample.pressureKpa = max(0.0F, (static_cast<float>(sample.fsrRaw) - cfg::FSR_ZERO_ADC) * cfg::FSR_KPA_PER_COUNT);
     sample.hx711Ready = scale.is_ready();
     sample.lipForce = 0;
     if (sample.hx711Ready) {
@@ -248,8 +250,8 @@ static void runMeasurement(ExaminationType type) {
         result.peakPressureKpa = max(result.peakPressureKpa, sample.pressureKpa);
       else if (type == ExaminationType::LipForce && sample.hx711Ready && isfinite(sample.lipForce))
         result.peakLipForce = max(result.peakLipForce, fabsf(sample.lipForce));
-      else if (type == ExaminationType::Emg && isfinite(sample.emgFiltered))
-        emgSum += sample.emgFiltered;
+      else if (type == ExaminationType::Emg && isfinite(sample.emgMicrovolts))
+        emgSum += sample.emgMicrovolts;
       ++result.sampleCount;
     }
     if (xQueueReceive(gButtonQueue, &button, 0) == pdTRUE && button.id == ButtonId::Back) {
@@ -362,7 +364,7 @@ static void communicationTask(void*) {
           if (gStatus.sample.hx711Ready && isfinite(gStatus.sample.lipForce)) Serial.print(gStatus.sample.lipForce, 2);
           else Serial.print("null");
           Serial.printf(",\"emg\":%.2f,\"wifi\":%s,\"paired\":%s,\"device_id\":\"%s\"}\n",
-            gStatus.sample.emgFiltered, gStatus.wifiConnected ? "true" : "false",
+            gStatus.sample.emgMicrovolts, gStatus.wifiConnected ? "true" : "false",
             gStatus.devicePaired ? "true" : "false", gStatus.deviceId);
           xSemaphoreGive(gStatusMutex);
         } else if (line == "results") storage.listResults(Serial);
@@ -548,7 +550,7 @@ static void syncTask(void*) {
       utcTimestamp(point.timestamp, sizeof(point.timestamp));
       if (strcmp(control.measurement, "emg") == 0) {
         point.rawValue = sample.emgRaw;
-        point.calibratedValue = sample.emgFiltered;
+        point.calibratedValue = sample.emgMicrovolts;
       } else if (strcmp(control.measurement, "lip_force") == 0) {
         point.rawValue = sample.lipForce;
         point.calibratedValue = sample.lipForce;

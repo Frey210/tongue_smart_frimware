@@ -15,7 +15,7 @@ struct SensorSample {
   uint32_t timestampMs;
   uint16_t emgRaw;
   uint16_t fsrRaw;
-  float emgFiltered;
+  float emgMicrovolts;
   float pressureKpa;
   float lipForce;
   bool hx711Ready;

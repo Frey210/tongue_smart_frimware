@@ -6,7 +6,7 @@ Firmware offline-first berbasis PlatformIO untuk ESP32-S3. Root proyek ini senga
 
 - FreeRTOS dual-core dengan task sensor, motor, tombol, GUI, storage, USB, dan aplikasi.
 - State machine boot → self-test → ready → examination → processing → save/result.
-- Sampling EMG dan FSR 100 Hz, HX711, filter EMA sederhana, dan agregasi hasil.
+- Sampling sensor EMG (aktivitas dalam uV) dan FSR lidah (tekanan dalam kPa) 100 Hz, serta load cell HX711 (gaya bibir dalam N).
 - UI TFT 320×240, tombol aktif-low dengan debounce, dan stepper non-blocking.
 - Hasil JSON offline di LittleFS `/results`, selalu diawali status `pending`.
 - USB CDC dengan command `help`, `status`, dan `results`.
@@ -42,10 +42,11 @@ Default build memakai `esp32-s3-devkitc-1` dan ILI9341 landscape 320×240. Ubah 
 
 Sebelum dipakai secara klinis, tentukan dan validasi:
 
-1. faktor kalibrasi dan offset HX711;
-2. kurva konversi ADC-ke-tekanan FSR (bukan sekadar skala linear);
-3. baseline, filtering, sample rate, dan satuan EMG;
-4. batas gerak, homing, arah, kecepatan, dan emergency stop stepper;
-5. target akurasi, prosedur kalibrasi, serta acceptance test perangkat.
+1. `HX711_COUNTS_PER_NEWTON` dan offset HX711;
+2. `FSR_ZERO_ADC` serta kurva ADC-ke-kPa FSR (bukan sekadar skala linear);
+3. `EMG_ADC_BIAS` dan `EMG_FRONTEND_GAIN` sesuai rangkaian analog;
+4. baseline, filtering, sample rate, dan satuan EMG;
+5. batas gerak, homing, arah, kecepatan, dan emergency stop stepper;
+6. target akurasi, prosedur kalibrasi, serta acceptance test perangkat.
 
 Build saat ini menggunakan TLS terenkripsi tetapi verifikasi CA masih dinonaktifkan untuk prototipe Phase 1. Root CA harus dipin atau memakai certificate bundle sebelum validasi klinis. Baseline ini bukan perangkat medis tervalidasi dan tidak boleh menghasilkan keputusan klinis sebelum proses verifikasi tersebut selesai.

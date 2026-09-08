@@ -94,7 +94,7 @@ void UserInterface::drawExamMenu(const SharedStatus& s) {
   tft_.setTextDatum(ML_DATUM);
   tft_.setTextColor(TFT_WHITE, BG);
   tft_.drawString("Choose examination", 18, 55, 2);
-  static const char* items[] = {"Tongue Pressure", "Lip Force", "Facial EMG", "Complete Examination"};
+  static const char* items[] = {"Tongue Pressure", "Lip Force", "EMG Activity", "Complete Examination"};
   drawMenu(items, 4, s.menuIndex, 78);
   tft_.setTextColor(MUTED, BG);
   tft_.drawString("BACK  Return", 18, 218, 2);
@@ -152,8 +152,8 @@ void UserInterface::drawMeasurement(const SharedStatus& s) {
     if (s.sample.hx711Ready && isfinite(s.sample.lipForce)) snprintf(value, sizeof(value), "%.1f", s.sample.lipForce);
     unit = "N";
   } else {
-    if (isfinite(s.sample.emgFiltered)) snprintf(value, sizeof(value), "%.0f", s.sample.emgFiltered);
-    unit = "raw";
+    if (isfinite(s.sample.emgMicrovolts)) snprintf(value, sizeof(value), "%.0f", s.sample.emgMicrovolts);
+    unit = "uV";
   }
   tft_.setTextColor(TFT_WHITE, BG);
   tft_.drawString(value, 160, 105, 7);
