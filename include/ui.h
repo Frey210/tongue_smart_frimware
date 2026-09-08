@@ -11,6 +11,9 @@ class UserInterface {
   AppState lastState_ = AppState::Error;
   uint8_t lastMenuIndex_ = 255;
   uint32_t lastValuesDraw_ = 0;
+  static constexpr uint8_t TRACE_POINTS = 51;
+  float trace_[TRACE_POINTS]{};
+  uint8_t traceCount_ = 0;
   void drawFrame(const SharedStatus& status);
   void drawHome(const SharedStatus& status);
   void drawExamMenu(const SharedStatus& status);

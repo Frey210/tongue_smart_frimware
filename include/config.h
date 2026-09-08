@@ -17,15 +17,15 @@ constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.3.3";
+constexpr char FIRMWARE_VERSION[] = "0.4.0";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline
 constexpr uint32_t GUI_PERIOD_MS = 50;      // 20 FPS
 constexpr uint32_t EXAM_DURATION_MS = 5000;
-constexpr uint32_t CONTROL_POLL_MS = 1500;
-constexpr uint32_t REMOTE_SAMPLE_MS = 100;
-constexpr uint8_t REMOTE_BATCH_SAMPLES = 10;
+constexpr uint32_t CONTROL_POLL_MS = 500;
+constexpr uint32_t REMOTE_SAMPLE_MS = 50;
+constexpr uint8_t REMOTE_BATCH_SAMPLES = 5;
 constexpr long LIP_FORCE_TRAVEL_STEPS = 2000;
 constexpr float LIP_FORCE_MOTOR_SPEED = 300.0F;
 constexpr float LIP_FORCE_MOTOR_ACCELERATION = 300.0F;

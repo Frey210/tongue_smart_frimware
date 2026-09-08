@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "config.h"
 #include <math.h>
+#include <string.h>
 
 namespace {
 constexpr uint16_t BG = TFT_BLACK;
@@ -140,29 +141,76 @@ void UserInterface::drawMessage(const SharedStatus& s, const char* title) {
 }
 
 void UserInterface::drawMeasurement(const SharedStatus& s) {
-  tft_.setTextDatum(MC_DATUM);
+  tft_.fillRect(0, 36, 320, 204, BG);
+  tft_.setTextDatum(ML_DATUM);
   tft_.setTextColor(TFT_CYAN, BG);
-  tft_.drawString(examName(s.examination), 160, 55, 2);
+  tft_.drawString(examName(s.examination), 12, 51, 2);
   char value[24] = "---";
   const char* unit = "";
+  float current = NAN;
   if (s.examination == ExaminationType::TonguePressure) {
-    if (isfinite(s.sample.pressureKpa)) snprintf(value, sizeof(value), "%.1f", s.sample.pressureKpa);
+    current = s.sample.pressureKpa;
+    if (isfinite(current)) snprintf(value, sizeof(value), "%.1f", current);
     unit = "kPa";
   } else if (s.examination == ExaminationType::LipForce) {
-    if (s.sample.hx711Ready && isfinite(s.sample.lipForce)) snprintf(value, sizeof(value), "%.1f", s.sample.lipForce);
+    current = s.sample.hx711Ready ? s.sample.lipForce : NAN;
+    if (isfinite(current)) snprintf(value, sizeof(value), "%.1f", current);
     unit = "N";
   } else {
-    if (isfinite(s.sample.emgMicrovolts)) snprintf(value, sizeof(value), "%.0f", s.sample.emgMicrovolts);
+    current = s.sample.emgMicrovolts;
+    if (isfinite(current)) snprintf(value, sizeof(value), "%.0f", current);
     unit = "uV";
   }
+
+  if (isfinite(current)) {
+    if (traceCount_ < TRACE_POINTS) trace_[traceCount_++] = current;
+    else {
+      memmove(trace_, trace_ + 1, sizeof(float) * (TRACE_POINTS - 1));
+      trace_[TRACE_POINTS - 1] = current;
+    }
+  }
+
+  tft_.setTextDatum(MR_DATUM);
   tft_.setTextColor(TFT_WHITE, BG);
-  tft_.drawString(value, 160, 105, 7);
+  tft_.drawString(value, 272, 51, 4);
   tft_.setTextColor(MUTED, BG);
-  tft_.drawString(unit, 160, 143, 2);
-  tft_.drawRoundRect(30, 174, 260, 16, 8, TFT_DARKGREY);
-  tft_.fillRoundRect(32, 176, (256 * s.progress) / 100, 12, 6, TFT_GREEN);
-  tft_.setTextColor(TFT_WHITE, BG);
-  tft_.drawString("MEASURING", 160, 211, 2);
+  tft_.drawString(unit, 307, 51, 2);
+
+  constexpr int16_t x0 = 40, y0 = 75, width = 267, height = 112;
+  tft_.drawRect(x0, y0, width, height, TFT_DARKGREY);
+  for (uint8_t i = 1; i < 4; ++i) {
+    const int16_t y = y0 + (height * i) / 4;
+    tft_.drawFastHLine(x0 + 1, y, width - 2, PANEL);
+  }
+  for (uint8_t i = 1; i < 5; ++i) {
+    const int16_t x = x0 + (width * i) / 5;
+    tft_.drawFastVLine(x, y0 + 1, height - 2, PANEL);
+  }
+
+  float scaleMax = 1.0F;
+  for (uint8_t i = 0; i < traceCount_; ++i) scaleMax = max(scaleMax, trace_[i]);
+  scaleMax *= 1.1F;
+  tft_.setTextDatum(MR_DATUM);
+  tft_.setTextColor(MUTED, BG);
+  tft_.drawFloat(scaleMax, scaleMax < 10 ? 1 : 0, x0 - 4, y0 + 3, 1);
+  tft_.drawString("0", x0 - 4, y0 + height - 3, 1);
+  tft_.setTextDatum(ML_DATUM);
+  tft_.drawString("-5s", x0, y0 + height + 8, 1);
+  tft_.setTextDatum(MR_DATUM);
+  tft_.drawString("now", x0 + width, y0 + height + 8, 1);
+  for (uint8_t i = 1; i < traceCount_; ++i) {
+    const int16_t x1 = x0 + 2 + ((i - 1) * (width - 4)) / (TRACE_POINTS - 1);
+    const int16_t x2 = x0 + 2 + (i * (width - 4)) / (TRACE_POINTS - 1);
+    const int16_t y1 = y0 + height - 2 - static_cast<int16_t>((trace_[i - 1] / scaleMax) * (height - 4));
+    const int16_t y2 = y0 + height - 2 - static_cast<int16_t>((trace_[i] / scaleMax) * (height - 4));
+    tft_.drawLine(x1, y1, x2, y2, TFT_CYAN);
+  }
+
+  tft_.drawRoundRect(40, 213, 267, 10, 5, TFT_DARKGREY);
+  tft_.fillRoundRect(42, 215, (263 * s.progress) / 100, 6, 3, TFT_GREEN);
+  tft_.setTextDatum(ML_DATUM);
+  tft_.setTextColor(TFT_GREEN, BG);
+  tft_.drawString("LIVE", 5, 218, 1);
 }
 
 void UserInterface::drawResult(const SharedStatus& s) {
@@ -190,6 +238,10 @@ void UserInterface::render(const SharedStatus& s) {
       ((s.state == AppState::Home || s.state == AppState::ExaminationMenu || s.state == AppState::Settings) &&
        s.menuIndex != lastMenuIndex_);
   if (pageChanged) {
+    if (s.state == AppState::Measurement) {
+      traceCount_ = 0;
+      lastValuesDraw_ = millis();
+    }
     drawFrame(s);
     lastState_ = s.state;
     lastMenuIndex_ = s.menuIndex;
@@ -207,9 +259,8 @@ void UserInterface::render(const SharedStatus& s) {
     else if (s.state == AppState::DevicePairing) drawPairing(s);
     else if (s.state == AppState::About) drawMessage(s, "TONGUE SMART v3");
   }
-  if (s.state == AppState::Measurement && millis() - lastValuesDraw_ >= 250) {
+  if (!pageChanged && s.state == AppState::Measurement && millis() - lastValuesDraw_ >= 100) {
     lastValuesDraw_ = millis();
-    drawFrame(s);
     drawMeasurement(s);
   }
   if (s.state == AppState::DevicePairing && millis() - lastValuesDraw_ >= 500) {

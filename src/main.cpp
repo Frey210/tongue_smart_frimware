@@ -95,7 +95,7 @@ static void sensorTask(void*) {
     sample.lipForce = 0;
     if (sample.hx711Ready) {
       const float force = scale.get_units(1);
-      if (isfinite(force) && fabsf(force) < 100000.0F) sample.lipForce = force;
+      if (isfinite(force) && fabsf(force) < 100000.0F) sample.lipForce = fabsf(force);
       else sample.hx711Ready = false;
     }
     xSemaphoreTake(gStatusMutex, portMAX_DELAY);

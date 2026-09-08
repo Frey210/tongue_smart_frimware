@@ -7,13 +7,13 @@ Firmware offline-first berbasis PlatformIO untuk ESP32-S3. Root proyek ini senga
 - FreeRTOS dual-core dengan task sensor, motor, tombol, GUI, storage, USB, dan aplikasi.
 - State machine boot → self-test → ready → examination → processing → save/result.
 - Sampling sensor EMG (aktivitas dalam uV) dan FSR lidah (tekanan dalam kPa) 100 Hz, serta load cell HX711 (gaya bibir dalam N).
-- UI TFT 320×240, tombol aktif-low dengan debounce, dan stepper non-blocking.
+- UI TFT 320×240 dengan grafik live bersumbu, tombol aktif-low dengan debounce, dan stepper non-blocking.
 - Pengukuran gaya bibir otomatis mengembalikan carriage ke posisi awal sebelum sesi selesai.
 - Hasil JSON offline di LittleFS `/results`, selalu diawali status `pending`.
 - USB CDC dengan command `help`, `status`, dan `results`.
 - Device ID unik dari eFuse MAC, secret acak per perangkat, dan credential tersimpan di NVS.
 - Pairing code dari menu LCD **Settings > Register Device** atau command serial `pair_device`.
-- Polling sesi/kontrol dashboard melalui HTTPS dan batch sensor idempoten dengan checksum SHA-256.
+- Polling sesi/kontrol dashboard melalui HTTPS dan batch live 250 ms yang idempoten dengan checksum SHA-256.
 - Perangkat legacy tetap dapat dipakai backend selama migrasi, tetapi firmware v0.3.0 memakai registry baru.
 
 ## Flow registrasi perangkat
