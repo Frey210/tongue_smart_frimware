@@ -626,7 +626,7 @@ void setup() {
   xTaskCreatePinnedToCore(guiTask, "gui", 4096, nullptr, 3, nullptr, 1);
   xTaskCreatePinnedToCore(communicationTask, "usb", 4096, nullptr, 2, nullptr, 1);
   xTaskCreatePinnedToCore(wifiTask, "wifi", 6144, nullptr, 2, nullptr, 1);
-  xTaskCreatePinnedToCore(syncTask, "http-sync", 6144, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(syncTask, "http-sync", cfg::HTTP_SYNC_TASK_STACK_BYTES, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(storageTask, "storage", 6144, nullptr, 1, nullptr, 1);
   xTaskCreatePinnedToCore(appTask, "application", 6144, nullptr, 4, nullptr, 1);
   Serial.println("Tongue Smart v3 clinical workflow ready. Type 'help'.");
