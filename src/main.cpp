@@ -131,6 +131,7 @@ static void buttonTask(void*) {
 }
 
 static void motorTask(void*) {
+  stepper.setPinsInverted(hw::STEPPER_DIR_INVERTED, false, false);
   stepper.setMaxSpeed(1000);
   stepper.setAcceleration(500);
   MotorCommand command{};

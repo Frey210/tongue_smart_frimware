@@ -13,10 +13,11 @@ constexpr uint8_t HX711_DT = 6;
 constexpr uint8_t HX711_SCK = 7;
 constexpr uint8_t STEPPER_DIR = 35;
 constexpr uint8_t STEPPER_STEP = 36;
+constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.3.1";
+constexpr char FIRMWARE_VERSION[] = "0.3.2";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline

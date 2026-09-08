@@ -46,7 +46,7 @@ Sebelum dipakai secara klinis, tentukan dan validasi:
 2. `FSR_ZERO_ADC` serta kurva ADC-ke-kPa FSR (bukan sekadar skala linear);
 3. `EMG_ADC_BIAS` dan `EMG_FRONTEND_GAIN` sesuai rangkaian analog;
 4. baseline, filtering, sample rate, dan satuan EMG;
-5. batas gerak, homing, arah, kecepatan, dan emergency stop stepper;
+5. batas gerak, homing, `STEPPER_DIR_INVERTED`, kecepatan, dan emergency stop stepper;
 6. target akurasi, prosedur kalibrasi, serta acceptance test perangkat.
 
 Build saat ini menggunakan TLS terenkripsi tetapi verifikasi CA masih dinonaktifkan untuk prototipe Phase 1. Root CA harus dipin atau memakai certificate bundle sebelum validasi klinis. Baseline ini bukan perangkat medis tervalidasi dan tidak boleh menghasilkan keputusan klinis sebelum proses verifikasi tersebut selesai.
