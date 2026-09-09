@@ -17,7 +17,7 @@ constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.5.0";
+constexpr char FIRMWARE_VERSION[] = "0.5.1";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline

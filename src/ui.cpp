@@ -21,6 +21,8 @@ bool UserInterface::begin() {
   tft_.drawString("TONGUE SMART", 160, 92, 4);
   tft_.setTextColor(TFT_CYAN, BG);
   tft_.drawString("Clinical Measurement System", 160, 130, 2);
+  plot_.setColorDepth(8);
+  plotReady_ = plot_.createSprite(307, 132) != nullptr;
   return true;
 }
 
@@ -113,6 +115,7 @@ void UserInterface::drawSettings(const SharedStatus& s) {
 }
 
 void UserInterface::drawPairing(const SharedStatus& s) {
+  tft_.fillRect(0, 36, 320, 204, BG);
   tft_.setTextDatum(MC_DATUM);
   tft_.setTextColor(TFT_CYAN, BG);
   tft_.drawString("REGISTER DEVICE", 160, 61, 4);
@@ -140,11 +143,20 @@ void UserInterface::drawMessage(const SharedStatus& s, const char* title) {
   }
 }
 
-void UserInterface::drawMeasurement(const SharedStatus& s) {
-  tft_.fillRect(0, 36, 320, 204, BG);
-  tft_.setTextDatum(ML_DATUM);
-  tft_.setTextColor(TFT_CYAN, BG);
-  tft_.drawString(examName(s.examination), 12, 51, 2);
+void UserInterface::drawMeasurement(const SharedStatus& s, bool initialize) {
+  if (initialize) {
+    tft_.fillRect(0, 36, 320, 204, BG);
+    tft_.setTextDatum(ML_DATUM);
+    tft_.setTextColor(TFT_CYAN, BG);
+    tft_.drawString(examName(s.examination), 12, 51, 2);
+    tft_.setTextColor(TFT_GREEN, BG);
+    tft_.drawString("LIVE", 5, 218, 1);
+    tft_.setTextDatum(MC_DATUM);
+    tft_.setTextColor(MUTED, BG);
+    if (s.remoteControlled) tft_.drawString("CONTROLLED FROM WEB", 174, 218, 1);
+    else if (s.examination != ExaminationType::LipForce)
+      tft_.drawString("OK / BACK  STOP & SAVE", 174, 218, 1);
+  }
   char value[24] = "---";
   const char* unit = "";
   float current = NAN;
@@ -172,54 +184,49 @@ void UserInterface::drawMeasurement(const SharedStatus& s) {
     }
   }
 
+  tft_.fillRect(190, 37, 130, 34, BG);
   tft_.setTextDatum(MR_DATUM);
   tft_.setTextColor(saturated ? TFT_ORANGE : TFT_WHITE, BG);
   tft_.drawString(value, 272, 51, 4);
   tft_.setTextColor(MUTED, BG);
   tft_.drawString(unit, 307, 51, 2);
 
-  constexpr int16_t x0 = 40, y0 = 75, width = 267, height = 112;
-  tft_.drawRect(x0, y0, width, height, TFT_DARKGREY);
+  constexpr int16_t x0 = 40, y0 = 0, width = 267, height = 112;
+  if (!plotReady_) return;
+  plot_.fillSprite(BG);
+  plot_.drawRect(x0, y0, width, height, TFT_DARKGREY);
   for (uint8_t i = 1; i < 4; ++i) {
     const int16_t y = y0 + (height * i) / 4;
-    tft_.drawFastHLine(x0 + 1, y, width - 2, PANEL);
+    plot_.drawFastHLine(x0 + 1, y, width - 2, PANEL);
   }
   for (uint8_t i = 1; i < 5; ++i) {
     const int16_t x = x0 + (width * i) / 5;
-    tft_.drawFastVLine(x, y0 + 1, height - 2, PANEL);
+    plot_.drawFastVLine(x, y0 + 1, height - 2, PANEL);
   }
 
   float scaleMax = 1.0F;
   for (uint8_t i = 0; i < traceCount_; ++i) scaleMax = max(scaleMax, trace_[i]);
   scaleMax *= 1.1F;
-  tft_.setTextDatum(MR_DATUM);
-  tft_.setTextColor(MUTED, BG);
-  tft_.drawFloat(scaleMax, scaleMax < 10 ? 1 : 0, x0 - 4, y0 + 3, 1);
-  tft_.drawString("0", x0 - 4, y0 + height - 3, 1);
-  tft_.setTextDatum(ML_DATUM);
-  tft_.drawString("-5s", x0, y0 + height + 8, 1);
-  tft_.setTextDatum(MR_DATUM);
-  tft_.drawString("now", x0 + width, y0 + height + 8, 1);
+  plot_.setTextDatum(MR_DATUM);
+  plot_.setTextColor(MUTED, BG);
+  plot_.drawFloat(scaleMax, scaleMax < 10 ? 1 : 0, x0 - 4, y0 + 3, 1);
+  plot_.drawString("0", x0 - 4, y0 + height - 3, 1);
+  plot_.setTextDatum(ML_DATUM);
+  plot_.drawString("-5s", x0, y0 + height + 8, 1);
+  plot_.setTextDatum(MR_DATUM);
+  plot_.drawString("now", x0 + width, y0 + height + 8, 1);
   for (uint8_t i = 1; i < traceCount_; ++i) {
     const int16_t x1 = x0 + 2 + ((i - 1) * (width - 4)) / (TRACE_POINTS - 1);
     const int16_t x2 = x0 + 2 + (i * (width - 4)) / (TRACE_POINTS - 1);
     const int16_t y1 = y0 + height - 2 - static_cast<int16_t>((trace_[i - 1] / scaleMax) * (height - 4));
     const int16_t y2 = y0 + height - 2 - static_cast<int16_t>((trace_[i] / scaleMax) * (height - 4));
-    tft_.drawLine(x1, y1, x2, y2, TFT_CYAN);
+    plot_.drawLine(x1, y1, x2, y2, TFT_CYAN);
   }
-
-  tft_.setTextDatum(ML_DATUM);
-  tft_.setTextColor(TFT_GREEN, BG);
-  tft_.drawString("LIVE", 5, 218, 1);
-  tft_.setTextDatum(MC_DATUM);
-  tft_.setTextColor(MUTED, BG);
-  if (s.remoteControlled) {
-    tft_.drawString("CONTROLLED FROM WEB", 174, 218, 1);
-  } else if (s.examination == ExaminationType::LipForce) {
+  plot_.pushSprite(0, 75);
+  if (!s.remoteControlled && s.examination == ExaminationType::LipForce) {
     tft_.drawRoundRect(40, 213, 267, 10, 5, TFT_DARKGREY);
+    tft_.fillRoundRect(42, 215, 263, 6, 3, BG);
     tft_.fillRoundRect(42, 215, (263 * s.progress) / 100, 6, 3, TFT_GREEN);
-  } else {
-    tft_.drawString("OK / BACK  STOP & SAVE", 174, 218, 1);
   }
 }
 
@@ -244,13 +251,12 @@ void UserInterface::drawResult(const SharedStatus& s) {
 }
 
 void UserInterface::render(const SharedStatus& s) {
-  const bool pageChanged = s.state != lastState_ ||
-      ((s.state == AppState::Home || s.state == AppState::ExaminationMenu || s.state == AppState::Settings) &&
-       s.menuIndex != lastMenuIndex_);
+  const bool pageChanged = s.state != lastState_;
+  const bool menuChanged = !pageChanged && s.menuIndex != lastMenuIndex_ &&
+      (s.state == AppState::Home || s.state == AppState::ExaminationMenu || s.state == AppState::Settings);
   if (pageChanged) {
     if (s.state == AppState::Measurement) {
       traceCount_ = 0;
-      lastValuesDraw_ = millis();
     }
     drawFrame(s);
     lastState_ = s.state;
@@ -266,16 +272,34 @@ void UserInterface::render(const SharedStatus& s) {
     else if (s.state == AppState::Error) drawMessage(s, "SENSOR ERROR");
     else if (s.state == AppState::History) drawMessage(s, "HISTORY");
     else if (s.state == AppState::Settings) drawSettings(s);
-    else if (s.state == AppState::DevicePairing) drawPairing(s);
+    else if (s.state == AppState::DevicePairing) {
+      drawPairing(s);
+      strlcpy(lastPairingCode_, s.pairingCode, sizeof(lastPairingCode_));
+      strlcpy(lastMessage_, s.message, sizeof(lastMessage_));
+    }
     else if (s.state == AppState::About) drawMessage(s, "TONGUE SMART v3");
+  } else if (menuChanged) {
+    lastMenuIndex_ = s.menuIndex;
+    if (s.state == AppState::Home) drawHome(s);
+    else if (s.state == AppState::ExaminationMenu) drawExamMenu(s);
+    else drawSettings(s);
   }
-  if (!pageChanged && s.state == AppState::Measurement && millis() - lastValuesDraw_ >= 100) {
+  if (s.state == AppState::Measurement && (pageChanged || millis() - lastValuesDraw_ >= 100)) {
     lastValuesDraw_ = millis();
-    drawMeasurement(s);
+    drawMeasurement(s, pageChanged);
   }
-  if (s.state == AppState::DevicePairing && millis() - lastValuesDraw_ >= 500) {
-    lastValuesDraw_ = millis();
-    drawFrame(s);
+  if (s.state == AppState::Countdown && s.countdown != lastCountdown_) {
+    lastCountdown_ = s.countdown;
+    tft_.fillRect(100, 137, 120, 57, BG);
+    tft_.setTextDatum(MC_DATUM);
+    tft_.setTextColor(TFT_GREEN, BG);
+    char n[3]; snprintf(n, sizeof(n), "%u", s.countdown);
+    tft_.drawString(n, 160, 164, 7);
+  }
+  if (!pageChanged && s.state == AppState::DevicePairing &&
+      (strcmp(lastPairingCode_, s.pairingCode) != 0 || strcmp(lastMessage_, s.message) != 0)) {
+    strlcpy(lastPairingCode_, s.pairingCode, sizeof(lastPairingCode_));
+    strlcpy(lastMessage_, s.message, sizeof(lastMessage_));
     drawPairing(s);
   }
 }
