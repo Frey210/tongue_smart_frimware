@@ -41,6 +41,8 @@ const char* UserInterface::stateName(AppState s) {
     case AppState::Saving: return "SAVING";
     case AppState::History: return "HISTORY";
     case AppState::Settings: return "SETTINGS";
+    case AppState::WifiSetup: return "WIFI SETUP";
+    case AppState::LipForceSetup: return "LIP FORCE SETUP";
     case AppState::DevicePairing: return "PAIR DEVICE";
     case AppState::About: return "ABOUT";
     case AppState::Error: return "SENSOR ERROR";
@@ -106,12 +108,51 @@ void UserInterface::drawExamMenu(const SharedStatus& s) {
 void UserInterface::drawSettings(const SharedStatus& s) {
   tft_.setTextDatum(ML_DATUM);
   tft_.setTextColor(TFT_WHITE, BG);
-  tft_.drawString("Connectivity", 18, 55, 2);
-  static const char* items[] = {"WiFi Setup Portal", "Register Device"};
-  drawMenu(items, 2, s.menuIndex, 82);
+  tft_.drawString("Connectivity & measurement", 18, 53, 2);
+  static const char* items[] = {"WiFi Setup Portal", "Register Device", "Lip Force Duration"};
+  drawMenu(items, 3, s.menuIndex, 70);
   tft_.setTextColor(MUTED, BG);
-  tft_.drawString(s.devicePaired ? s.deviceId : "Device not registered", 18, 170, 2);
-  tft_.drawString("BACK  Return", 18, 218, 2);
+  tft_.drawString(s.devicePaired ? s.deviceId : "Device not registered", 18, 174, 1);
+  char duration[32];
+  snprintf(duration, sizeof(duration), "Lip force pull: %u seconds", s.lipForceDurationSeconds);
+  tft_.drawString(duration, 18, 194, 1);
+  tft_.drawString("BACK  Return", 18, 222, 2);
+}
+
+void UserInterface::drawWifiSetup(const SharedStatus& s) {
+  tft_.fillRect(0, 36, 320, 204, BG);
+  tft_.setTextDatum(MC_DATUM);
+  tft_.setTextColor(TFT_CYAN, BG);
+  const char* title = s.wifiSetupStep == 0 ? "STARTING PORTAL" :
+      s.wifiSetupStep == 1 ? "PORTAL ACTIVE" :
+      s.wifiSetupStep == 2 ? "CONNECTING" :
+      s.wifiSetupStep == 3 ? "WIFI CONNECTED" : "PORTAL CLOSED";
+  tft_.drawString(title, 160, 61, 4);
+  tft_.setTextColor(TFT_WHITE, BG);
+  if (s.wifiSetupStep == 1) {
+    tft_.drawString("1. Join: TongueSmart-Setup", 160, 105, 2);
+    tft_.drawString("2. Open: 192.168.4.1", 160, 133, 2);
+  } else {
+    tft_.drawString(s.message, 160, 116, 2);
+  }
+  tft_.setTextColor(MUTED, BG);
+  if (s.wifiSetupStep == 1) tft_.drawString("Waiting for WiFi credentials", 160, 174, 2);
+  else if (s.wifiSetupStep == 2) tft_.drawString("Please wait...", 160, 174, 2);
+  else if (s.wifiSetupStep == 3) tft_.drawString("Returning to Home", 160, 174, 2);
+  if (s.wifiSetupStep <= 1) tft_.drawString("BACK  Cancel portal", 160, 218, 2);
+}
+
+void UserInterface::drawLipForceSetup(const SharedStatus& s) {
+  tft_.setTextDatum(MC_DATUM);
+  tft_.setTextColor(TFT_CYAN, BG);
+  tft_.drawString("PULL DURATION", 160, 63, 4);
+  char value[12];
+  snprintf(value, sizeof(value), "%u s", s.lipForceDurationSeconds);
+  tft_.setTextColor(TFT_WHITE, BG);
+  tft_.drawString(value, 160, 119, 7);
+  tft_.setTextColor(MUTED, BG);
+  tft_.drawString("UP / DOWN  Adjust  (1-15 s)", 160, 172, 2);
+  tft_.drawString("OK  Save       BACK  Cancel", 160, 215, 2);
 }
 
 void UserInterface::drawPairing(const SharedStatus& s) {
@@ -272,6 +313,15 @@ void UserInterface::render(const SharedStatus& s) {
     else if (s.state == AppState::Error) drawMessage(s, "SENSOR ERROR");
     else if (s.state == AppState::History) drawMessage(s, "HISTORY");
     else if (s.state == AppState::Settings) drawSettings(s);
+    else if (s.state == AppState::WifiSetup) {
+      drawWifiSetup(s);
+      lastWifiSetupStep_ = s.wifiSetupStep;
+      strlcpy(lastMessage_, s.message, sizeof(lastMessage_));
+    }
+    else if (s.state == AppState::LipForceSetup) {
+      drawLipForceSetup(s);
+      lastLipForceDurationSeconds_ = s.lipForceDurationSeconds;
+    }
     else if (s.state == AppState::DevicePairing) {
       drawPairing(s);
       strlcpy(lastPairingCode_, s.pairingCode, sizeof(lastPairingCode_));
@@ -301,5 +351,16 @@ void UserInterface::render(const SharedStatus& s) {
     strlcpy(lastPairingCode_, s.pairingCode, sizeof(lastPairingCode_));
     strlcpy(lastMessage_, s.message, sizeof(lastMessage_));
     drawPairing(s);
+  }
+  if (!pageChanged && s.state == AppState::WifiSetup &&
+      (s.wifiSetupStep != lastWifiSetupStep_ || strcmp(lastMessage_, s.message) != 0)) {
+    lastWifiSetupStep_ = s.wifiSetupStep;
+    strlcpy(lastMessage_, s.message, sizeof(lastMessage_));
+    drawWifiSetup(s);
+  }
+  if (!pageChanged && s.state == AppState::LipForceSetup &&
+      s.lipForceDurationSeconds != lastLipForceDurationSeconds_) {
+    lastLipForceDurationSeconds_ = s.lipForceDurationSeconds;
+    drawLipForceSetup(s);
   }
 }

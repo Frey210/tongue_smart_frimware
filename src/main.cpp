@@ -26,6 +26,7 @@ static StorageManager storage;
 static UserInterface ui;
 static Preferences preferences;
 static DeviceApi deviceApi;
+static uint8_t lipForceDurationSeconds = cfg::LIP_FORCE_DURATION_DEFAULT_SECONDS;
 
 static void enqueueSyncEvent(const char* event, const char* suffix) {
   SyncEvent sync{};
@@ -48,6 +49,14 @@ static void updateStatus(AppState state, const char* message, bool resetMenu = f
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.state = state;
   if (resetMenu) gStatus.menuIndex = 0;
+  strlcpy(gStatus.message, message, sizeof(gStatus.message));
+  xSemaphoreGive(gStatusMutex);
+}
+
+static void updateWifiSetup(uint8_t step, const char* message) {
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.state = AppState::WifiSetup;
+  gStatus.wifiSetupStep = step;
   strlcpy(gStatus.message, message, sizeof(gStatus.message));
   xSemaphoreGive(gStatusMutex);
 }
@@ -234,6 +243,7 @@ static void runMeasurement(ExaminationType type, bool remoteControlled = false) 
 
   ExaminationResult result{};
   const uint32_t started = millis();
+  const uint32_t lipForceDurationMs = static_cast<uint32_t>(lipForceDurationSeconds) * 1000U;
   result.startedMs = started;
   float emgSum = 0;
   const long lipForceStartPosition = stepper.currentPosition();
@@ -255,12 +265,12 @@ static void runMeasurement(ExaminationType type, bool remoteControlled = false) 
   SensorSample sample{};
   ButtonEvent button{};
   bool cancelled = false;
-  while (type != ExaminationType::LipForce || millis() - started < cfg::EXAM_DURATION_MS) {
+  while (type != ExaminationType::LipForce || millis() - started < lipForceDurationMs) {
     if (xQueueReceive(gSensorQueue, &sample, pdMS_TO_TICKS(20)) == pdTRUE) {
       xSemaphoreTake(gStatusMutex, portMAX_DELAY);
       gStatus.sample = sample;
       gStatus.progress = type == ExaminationType::LipForce
-          ? min<uint32_t>(100, ((millis() - started) * 100) / cfg::EXAM_DURATION_MS)
+          ? min<uint32_t>(100, ((millis() - started) * 100) / lipForceDurationMs)
           : 0;
       xSemaphoreGive(gStatusMutex);
       if (type == ExaminationType::TonguePressure && isfinite(sample.pressureKpa))
@@ -385,15 +395,51 @@ static void appTask(void*) {
       runMeasurement(gStatus.examination);
     } else if (state == AppState::Settings) {
       if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
-        index = (index + 1) % 2;
+        index = event.id == ButtonId::Up ? (index + 2) % 3 : (index + 1) % 3;
         xSemaphoreTake(gStatusMutex, portMAX_DELAY);
         gStatus.menuIndex = index;
         xSemaphoreGive(gStatusMutex);
+      } else if (event.id == ButtonId::Back) {
+        updateStatus(AppState::Home, "Ready", true);
       } else if (event.id == ButtonId::Ok) {
-        const WifiCommand command{index == 0 ? WifiCommandType::StartPortal : WifiCommandType::StartPairing};
-        xQueueSend(gWifiCommandQueue, &command, 0);
-        updateStatus(index == 0 ? AppState::Settings : AppState::DevicePairing,
-                     index == 0 ? "Starting WiFi portal..." : "Requesting pairing code...");
+        if (index == 2) {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          gStatus.lipForceDurationSeconds = lipForceDurationSeconds;
+          xSemaphoreGive(gStatusMutex);
+          updateStatus(AppState::LipForceSetup, "Adjust pull duration");
+        } else {
+          const WifiCommand command{index == 0 ? WifiCommandType::StartPortal : WifiCommandType::StartPairing};
+          if (xQueueSend(gWifiCommandQueue, &command, 0) != pdTRUE) {
+            updateStatus(AppState::Settings, "Connectivity request busy");
+          } else if (index == 0) {
+            updateWifiSetup(0, "Preparing access point...");
+          } else {
+            updateStatus(AppState::DevicePairing, "Requesting pairing code...");
+          }
+        }
+      }
+    } else if (state == AppState::WifiSetup && event.id == ButtonId::Back) {
+      const WifiCommand command{WifiCommandType::StopPortal};
+      xQueueSend(gWifiCommandQueue, &command, 0);
+      updateWifiSetup(4, "Closing setup portal...");
+    } else if (state == AppState::LipForceSetup) {
+      if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        uint8_t& seconds = gStatus.lipForceDurationSeconds;
+        if (event.id == ButtonId::Up && seconds < cfg::LIP_FORCE_DURATION_MAX_SECONDS) ++seconds;
+        if (event.id == ButtonId::Down && seconds > cfg::LIP_FORCE_DURATION_MIN_SECONDS) --seconds;
+        xSemaphoreGive(gStatusMutex);
+      } else if (event.id == ButtonId::Ok) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        lipForceDurationSeconds = gStatus.lipForceDurationSeconds;
+        xSemaphoreGive(gStatusMutex);
+        preferences.putUChar("lip_secs", lipForceDurationSeconds);
+        updateStatus(AppState::Settings, "Lip force duration saved", true);
+      } else if (event.id == ButtonId::Back) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        gStatus.lipForceDurationSeconds = lipForceDurationSeconds;
+        xSemaphoreGive(gStatusMutex);
+        updateStatus(AppState::Settings, "Duration unchanged", true);
       }
     } else if (state == AppState::Result && event.id == ButtonId::Ok) {
       updateStatus(AppState::Home, "Ready", true);
@@ -444,11 +490,21 @@ static void communicationTask(void*) {
 static void wifiTask(void*) {
   WiFi.mode(WIFI_STA);
   WiFi.begin();
+  WiFiManager manager;
+  char configuredBase[160]{};
+  WiFiManagerParameter apiParameter("api_base", "API base URL", "", sizeof(configuredBase) - 1);
+  bool portalActive = false;
+  uint32_t portalStarted = 0;
   WifiCommand command{};
   uint32_t lastCheck = 0;
   uint32_t lastHeartbeat = 0;
   bool wasConnected = false;
   bool timeConfigured = false;
+
+  manager.addParameter(&apiParameter);
+  manager.setConfigPortalBlocking(false);
+  manager.setConnectTimeout(20);
+  manager.setSaveConfigCallback([]() { updateWifiSetup(2, "Credentials saved, connecting..."); });
 
   for (;;) {
     if (millis() - lastCheck >= 1000) {
@@ -469,7 +525,41 @@ static void wifiTask(void*) {
       wasConnected = connected;
     }
 
+    if (portalActive) {
+      const bool connected = manager.process();
+      if (connected) {
+        portalActive = false;
+        manager.stopConfigPortal();
+        xEventGroupClearBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
+        updateWifiSetup(2, "Validating network connection...");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        const char* configuredUrl = apiParameter.getValue();
+        if (configuredUrl && configuredUrl[0] != '\0') deviceApi.setBaseUrl(configuredUrl);
+        setWifiConnected(true);
+        char message[64];
+        snprintf(message, sizeof(message), "Connected to %.32s", WiFi.SSID().c_str());
+        updateWifiSetup(3, message);
+        enqueueSyncEvent("online", "wifi-setup");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        updateStatus(AppState::Home, "WiFi connected", true);
+      } else if (millis() - portalStarted >= 180000U) {
+        portalActive = false;
+        manager.stopConfigPortal();
+        xEventGroupClearBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
+        updateWifiSetup(4, "Setup timed out");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        updateStatus(AppState::Settings, "WiFi setup timed out", true);
+      }
+    }
+
     if (xQueueReceive(gWifiCommandQueue, &command, pdMS_TO_TICKS(100)) != pdTRUE) continue;
+    if (command.type == WifiCommandType::StopPortal) {
+      if (portalActive) manager.stopConfigPortal();
+      portalActive = false;
+      xEventGroupClearBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
+      updateStatus(AppState::Settings, "WiFi setup cancelled", true);
+      continue;
+    }
     if (command.type == WifiCommandType::Disconnect) {
       WiFi.disconnect(false, false);
       setWifiConnected(false);
@@ -514,23 +604,15 @@ static void wifiTask(void*) {
       continue;
     }
 
-    xEventGroupSetBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
-    updateStatus(AppState::Settings, "AP: TongueSmart-Setup");
-    WiFiManager manager;
-    char configuredBase[160]{};
+    if (portalActive) continue;
     strlcpy(configuredBase, deviceApi.baseUrl(), sizeof(configuredBase));
-    WiFiManagerParameter apiParameter("api_base", "API base URL", configuredBase, sizeof(configuredBase) - 1);
-    manager.addParameter(&apiParameter);
-    manager.setConfigPortalTimeout(180);
-    manager.setConnectTimeout(20);
-    const bool connected = manager.startConfigPortal("TongueSmart-Setup");
-    const char* configuredUrl = apiParameter.getValue();
-    if (configuredUrl && configuredUrl[0] != '\0') {
-      deviceApi.setBaseUrl(configuredUrl);
-    }
-    setWifiConnected(connected && WiFi.status() == WL_CONNECTED);
-    xEventGroupClearBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
-    updateStatus(AppState::Home, connected ? "WiFi connected" : "WiFi setup ended", true);
+    apiParameter.setValue(configuredBase, sizeof(configuredBase) - 1);
+    updateWifiSetup(0, "Starting TongueSmart-Setup...");
+    manager.startConfigPortal("TongueSmart-Setup");
+    portalActive = true;
+    portalStarted = millis();
+    xEventGroupSetBits(gSystemEvents, EVT_WIFI_PORTAL_ACTIVE);
+    updateWifiSetup(1, "Portal ready");
   }
 }
 
@@ -676,6 +758,10 @@ void setup() {
   gStatus.state = AppState::Boot;
   strlcpy(gStatus.message, "Starting...", sizeof(gStatus.message));
   preferences.begin("tongue-smart", false);
+  lipForceDurationSeconds = constrain(
+      preferences.getUChar("lip_secs", cfg::LIP_FORCE_DURATION_DEFAULT_SECONDS),
+      cfg::LIP_FORCE_DURATION_MIN_SECONDS, cfg::LIP_FORCE_DURATION_MAX_SECONDS);
+  gStatus.lipForceDurationSeconds = lipForceDurationSeconds;
   deviceApi.begin(preferences);
   gStatus.devicePaired = deviceApi.isPaired();
   strlcpy(gStatus.deviceId, deviceApi.deviceId(), sizeof(gStatus.deviceId));

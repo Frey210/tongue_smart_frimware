@@ -24,6 +24,10 @@ Firmware offline-first berbasis PlatformIO untuk ESP32-S3. Root proyek ini senga
 4. Setelah claim berhasil, LCD kembali ke Home dengan status `Paired`.
 5. Buat sesi di dashboard dan pilih device ID yang tampil pada LCD.
 
+LCD menampilkan tahap portal WiFi mulai dari access point aktif, penyimpanan kredensial,
+hingga koneksi berhasil. Tombol **BACK** membatalkan portal. Durasi tarikan Lip Force
+dapat diatur 1–15 detik melalui **Settings > Lip Force Duration** dan tersimpan setelah restart.
+
 Secret tidak dicetak ke LCD/serial dan backend hanya menyimpan hash. NVS menyimpan `dev_id`, `hw_uid`, `dev_key`, status pairing, dan API base URL.
 
 ## Build dan upload
