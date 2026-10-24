@@ -15,6 +15,8 @@ class UserInterface {
   uint8_t lastCountdown_ = 255;
   uint8_t lastWifiSetupStep_ = 255;
   uint8_t lastLipForceDurationSeconds_ = 255;
+  uint16_t lastEmgReferenceMv_ = 0;
+  uint8_t lastEmgDigit_ = 255;
   char lastPairingCode_[16]{};
   char lastMessage_[64]{};
   uint32_t lastValuesDraw_ = 0;
@@ -27,6 +29,7 @@ class UserInterface {
   void drawSettings(const SharedStatus& status);
   void drawWifiSetup(const SharedStatus& status);
   void drawLipForceSetup(const SharedStatus& status);
+  void drawEmgCalibration(const SharedStatus& status, bool initialize);
   void drawPairing(const SharedStatus& status);
   void drawMessage(const SharedStatus& status, const char* title);
   void drawMeasurement(const SharedStatus& status, bool initialize);

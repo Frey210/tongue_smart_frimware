@@ -13,6 +13,7 @@
 #include "storage_manager.h"
 #include "types.h"
 #include "ui.h"
+#include "emg_calibration_selftest.h"
 
 QueueHandle_t gSensorQueue, gButtonQueue, gMotorQueue, gStorageQueue, gSensorCommandQueue, gWifiCommandQueue, gSyncQueue,
     gRemoteMeasurementQueue;
@@ -25,6 +26,7 @@ static AccelStepper stepper(AccelStepper::DRIVER, hw::STEPPER_STEP, hw::STEPPER_
 static StorageManager storage;
 static UserInterface ui;
 static Preferences preferences;
+static Preferences emgPreferences;
 static DeviceApi deviceApi;
 static uint8_t lipForceDurationSeconds = cfg::LIP_FORCE_DURATION_DEFAULT_SECONDS;
 
@@ -74,6 +76,7 @@ static void sensorTask(void*) {
   scale.set_scale(cfg::HX711_COUNTS_PER_NEWTON);
   scale.set_offset(cfg::HX711_OFFSET);
   float emgEma = 0;
+  EmgCalibration lastCalibration;
   TickType_t wake = xTaskGetTickCount();
   for (;;) {
     SensorCommand command{};
@@ -95,9 +98,15 @@ static void sensorTask(void*) {
     SensorSample sample{};
     sample.timestampMs = millis();
     sample.emgRaw = analogRead(hw::EMG_ADC);
+    sample.emgOutputMv = analogReadMilliVolts(hw::EMG_ADC);
     sample.fsrRaw = analogRead(hw::FSR_ADC);
-    const float emgUv = fabsf(static_cast<float>(sample.emgRaw) - cfg::EMG_ADC_BIAS) *
-                        cfg::ADC_REFERENCE_UV / cfg::ADC_MAX_COUNT / cfg::EMG_FRONTEND_GAIN;
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    const EmgCalibration calibration = gStatus.emgCalibration;
+    xSemaphoreGive(gStatusMutex);
+    if (memcmp(&calibration, &lastCalibration, sizeof(calibration)) != 0) emgEma = 0;
+    lastCalibration = calibration;
+    const float emgUv = fabsf(calibration.correctedMv(sample.emgOutputMv) - calibration.baselineMv) *
+                        1000.0F / cfg::EMG_FRONTEND_GAIN;
     emgEma += cfg::EMG_ENVELOPE_ALPHA * (emgUv - emgEma);
     sample.emgMicrovolts = isfinite(emgEma) ? emgEma : 0;
     sample.pressureKpa = max(0.0F, (static_cast<float>(sample.fsrRaw) - cfg::FSR_ZERO_ADC) * cfg::FSR_KPA_PER_COUNT);
@@ -237,6 +246,64 @@ static bool calibrateLipForce() {
   return true;
 }
 
+static bool saveEmgCalibration(const EmgCalibration& calibration) {
+  if (!calibration.valid() ||
+      emgPreferences.putBytes("profile", &calibration, sizeof(calibration)) != sizeof(calibration)) return false;
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.emgCalibration = calibration;
+  gStatus.emgReferenceMv = static_cast<uint16_t>(calibration.referenceMv);
+  xSemaphoreGive(gStatusMutex);
+  return true;
+}
+
+static void captureEmgCalibration(bool dc) {
+  updateStatus(AppState::EmgCapture, dc ? "DC check: hold SIG voltage steady" : "Rest: keep muscle relaxed");
+  EmgCapture capture;
+  uint32_t lastTimestamp = 0;
+  const uint32_t started = millis();
+  for (;;) {
+    ButtonEvent button{};
+    if (xQueueReceive(gButtonQueue, &button, 0) == pdTRUE && button.id == ButtonId::Back) {
+      updateStatus(AppState::EmgCalibrationMenu, "Cancelled; old values kept", true);
+      return;
+    }
+    RemoteMeasurementCommand remote{};
+    if (xQueuePeek(gRemoteMeasurementQueue, &remote, 0) == pdTRUE && remote.start) {
+      updateStatus(AppState::EmgCalibrationMenu, "Cancelled: web measurement starting", true);
+      return;
+    }
+    SensorSample sample{};
+    if (xQueuePeek(gSensorQueue, &sample, 0) == pdTRUE && sample.timestampMs != lastTimestamp) {
+      capture.add(sample.emgRaw, sample.emgOutputMv);
+      lastTimestamp = sample.timestampMs;
+    }
+    if (millis() - started >= 4000) break;
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  if (!capture.stable()) {
+    updateStatus(AppState::EmgCalibrationMenu,
+      capture.clipped ? "Rejected: ADC clipping / out of range" : "Rejected: unstable or missing signal", true);
+    return;
+  }
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  EmgCalibration calibration = gStatus.emgCalibration;
+  const float reference = gStatus.emgReferenceMv;
+  xSemaphoreGive(gStatusMutex);
+  if (dc) {
+    calibration.dcOffsetMv = reference - capture.mean();
+    calibration.referenceMv = reference;
+    calibration.flags = 1;
+    calibration.baselineMv = 1650;
+  } else {
+    calibration.baselineMv = calibration.correctedMv(capture.mean());
+    calibration.flags |= 2;
+  }
+  const bool saved = saveEmgCalibration(calibration);
+  updateStatus(AppState::EmgCalibrationMenu, saved ?
+      (dc ? "DC saved; capture rest again" : "Rest saved; gain still estimated") :
+      "Not saved: invalid value / flash error", true);
+}
+
 static void runMeasurement(ExaminationType type, bool remoteControlled = false) {
   if (type == ExaminationType::LipForce && !calibrateLipForce()) return;
   if (!remoteControlled && !countdown()) return;
@@ -370,7 +437,7 @@ static void appTask(void*) {
       } else if (event.id == ButtonId::Ok) {
         if (index == 0) updateStatus(AppState::ExaminationMenu, "Choose examination", true);
         else if (index == 1) updateStatus(AppState::History, "Use USB command: results");
-        else if (index == 2) updateStatus(AppState::Calibration, "Calibration menu");
+        else if (index == 2) updateStatus(AppState::EmgCalibrationMenu, "EMG: gain not calibrated", true);
         else if (index == 3) updateStatus(AppState::Settings, "Choose connectivity action", true);
         else updateStatus(AppState::About, "Offline clinical firmware");
       }
@@ -393,6 +460,51 @@ static void appTask(void*) {
       }
     } else if (state == AppState::PatientReady && event.id == ButtonId::Ok) {
       runMeasurement(gStatus.examination);
+    } else if (state == AppState::EmgCalibrationMenu) {
+      if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        gStatus.menuIndex = event.id == ButtonId::Up ? (index + 3) % 4 : (index + 1) % 4;
+        xSemaphoreGive(gStatusMutex);
+      } else if (event.id == ButtonId::Back) {
+        updateStatus(AppState::Home, "Ready", true);
+      } else if (event.id == ButtonId::Ok) {
+        if (index == 0) {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          gStatus.emgReferenceMv = static_cast<uint16_t>(gStatus.emgCalibration.referenceMv);
+          gStatus.emgDigit = 0;
+          xSemaphoreGive(gStatusMutex);
+          updateStatus(AppState::EmgReference, "Enter simultaneous SIG-GND DC reading");
+        } else if (index == 1) {
+          updateStatus(AppState::EmgBaseline, "Use resting signal, not open electrodes");
+        } else if (index == 2) {
+          updateStatus(AppState::EmgReset, "OK clears DC and rest on this device");
+        } else {
+          updateStatus(AppState::Home, "Ready", true);
+        }
+      }
+    } else if (state == AppState::EmgReference) {
+      if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        const int places[] = {1000, 100, 10, 1};
+        const int delta = (event.id == ButtonId::Up ? 1 : -1) * places[gStatus.emgDigit];
+        gStatus.emgReferenceMv = constrain(static_cast<int>(gStatus.emgReferenceMv) + delta, 100, 3000);
+        xSemaphoreGive(gStatusMutex);
+      } else if (event.id == ButtonId::Ok) {
+        if (gStatus.emgDigit < 3) {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          ++gStatus.emgDigit;
+          xSemaphoreGive(gStatusMutex);
+        } else captureEmgCalibration(true);
+      }
+      else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
+    } else if (state == AppState::EmgBaseline) {
+      if (event.id == ButtonId::Ok) captureEmgCalibration(false);
+      else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
+    } else if (state == AppState::EmgReset) {
+      if (event.id == ButtonId::Ok) {
+        const bool saved = saveEmgCalibration(EmgCalibration{});
+        updateStatus(AppState::EmgCalibrationMenu, saved ? "Defaults restored on this device" : "Reset failed: flash error", true);
+      } else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
     } else if (state == AppState::Settings) {
       if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
         index = event.id == ButtonId::Up ? (index + 2) % 3 : (index + 1) % 3;
@@ -457,7 +569,22 @@ static void communicationTask(void*) {
       const char c = Serial.read();
       if (c == '\n') {
         line.trim();
-        if (line == "status") {
+        if (line == "emg_selftest") {
+          Serial.printf("{\"emg_selftest\":\"%s\"}\n", emgCalibrationSelftest() ? "passed" : "failed");
+        } else if (line == "emg_status") {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          const SensorSample sample = gStatus.sample;
+          const EmgCalibration calibration = gStatus.emgCalibration;
+          const AppState state = gStatus.state;
+          xSemaphoreGive(gStatusMutex);
+          Serial.printf("{\"device_id\":\"%s\",\"firmware\":\"%s\",\"state\":%u,\"emg_adc\":%u,"
+            "\"emg_adc_mv\":%.1f,\"emg_corrected_mv\":%.1f,\"emg_offset_mv\":%.1f,"
+            "\"emg_baseline_mv\":%.1f,\"emg_reference_mv\":%.1f,\"calibration_flags\":%lu,"
+            "\"gain_verified\":false,\"emg_uv_estimate\":%.2f}\n",
+            deviceApi.deviceId(), cfg::FIRMWARE_VERSION, static_cast<unsigned>(state), sample.emgRaw,
+            sample.emgOutputMv, calibration.correctedMv(sample.emgOutputMv), calibration.dcOffsetMv,
+            calibration.baselineMv, calibration.referenceMv, static_cast<unsigned long>(calibration.flags), sample.emgMicrovolts);
+        } else if (line == "status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           Serial.printf("{\"state\":%u,\"exam\":%u,\"sensor_ready\":%s,\"fsr_adc\":%u,\"fsr_saturated\":%s,\"pressure_kpa\":%.2f,\"lip_force\":",
             static_cast<unsigned>(gStatus.state), static_cast<unsigned>(gStatus.examination),
@@ -478,7 +605,7 @@ static void communicationTask(void*) {
           const WifiCommand command{WifiCommandType::StartPairing};
           xQueueSend(gWifiCommandQueue, &command, 0);
           Serial.println("{\"pairing\":\"starting\"}");
-        } else if (line == "help") Serial.println("commands: help, status, results, wifi_setup, pair_device");
+        } else if (line == "help") Serial.println("commands: help, status, emg_status, emg_selftest, results, wifi_setup, pair_device");
         else Serial.println("{\"error\":\"unknown command\"}");
         line = "";
       } else if (c != '\r' && line.length() < 96) line += c;
@@ -717,7 +844,8 @@ static void syncTask(void*) {
       if (strcmp(control.measurement, "emg") == 0) {
         point.rawValue = sample.emgRaw;
         point.calibratedValue = sample.emgMicrovolts;
-        point.signalValid = sample.emgRaw > 5 && sample.emgRaw < cfg::ADC_SATURATION_COUNT;
+        point.signalValid = sample.emgRaw > 5 && sample.emgRaw < cfg::ADC_SATURATION_COUNT &&
+            sample.emgOutputMv >= 100 && sample.emgOutputMv <= 3050;
       } else if (strcmp(control.measurement, "lip_force") == 0) {
         point.rawValue = sample.lipForce;
         point.calibratedValue = sample.lipForce;
@@ -758,6 +886,14 @@ void setup() {
   gStatus.state = AppState::Boot;
   strlcpy(gStatus.message, "Starting...", sizeof(gStatus.message));
   preferences.begin("tongue-smart", false);
+  emgPreferences.begin("emg-cal", false);
+  EmgCalibration loadedCalibration;
+  if (emgPreferences.getBytesLength("profile") == sizeof(loadedCalibration)) {
+    emgPreferences.getBytes("profile", &loadedCalibration, sizeof(loadedCalibration));
+    if (!loadedCalibration.valid()) loadedCalibration = EmgCalibration{};
+  }
+  gStatus.emgCalibration = loadedCalibration;
+  gStatus.emgReferenceMv = static_cast<uint16_t>(loadedCalibration.referenceMv);
   lipForceDurationSeconds = constrain(
       preferences.getUChar("lip_secs", cfg::LIP_FORCE_DURATION_DEFAULT_SECONDS),
       cfg::LIP_FORCE_DURATION_MIN_SECONDS, cfg::LIP_FORCE_DURATION_MAX_SECONDS);

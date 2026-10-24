@@ -1,10 +1,12 @@
 #pragma once
 #include <Arduino.h>
+#include "emg_calibration.h"
 
 enum class AppState : uint8_t {
   Boot, SelfTest, Home, ExaminationMenu, PatientReady, Calibration,
   Countdown, Measurement, Processing, Result, Saving, History,
-  Settings, WifiSetup, LipForceSetup, DevicePairing, About, Error, Recovery
+  Settings, WifiSetup, LipForceSetup, DevicePairing, About, Error, Recovery,
+  EmgCalibrationMenu, EmgReference, EmgBaseline, EmgCapture, EmgReset
 };
 enum class ExaminationType : uint8_t { TonguePressure, LipForce, Emg, Complete };
 enum class ButtonId : uint8_t { Up, Down, Ok, Back };
@@ -14,6 +16,7 @@ enum class WifiCommandType : uint8_t { StartPortal, StopPortal, StartPairing, Di
 struct SensorSample {
   uint32_t timestampMs;
   uint16_t emgRaw;
+  float emgOutputMv;
   uint16_t fsrRaw;
   float emgMicrovolts;
   float pressureKpa;
@@ -50,6 +53,9 @@ struct SharedStatus {
   bool remoteControlled;
   uint8_t wifiSetupStep;
   uint8_t lipForceDurationSeconds;
+  EmgCalibration emgCalibration;
+  uint16_t emgReferenceMv = 1500;
+  uint8_t emgDigit = 0;
   SensorSample sample;
   ExaminationResult result;
   char message[64];

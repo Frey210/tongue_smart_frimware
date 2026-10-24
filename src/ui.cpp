@@ -47,6 +47,11 @@ const char* UserInterface::stateName(AppState s) {
     case AppState::About: return "ABOUT";
     case AppState::Error: return "SENSOR ERROR";
     case AppState::Recovery: return "RECOVERY";
+    case AppState::EmgCalibrationMenu: return "EMG SETUP";
+    case AppState::EmgReference: return "DC REFERENCE";
+    case AppState::EmgBaseline: return "REST BASELINE";
+    case AppState::EmgCapture: return "CAPTURING";
+    case AppState::EmgReset: return "RESET EMG";
   }
   return "";
 }
@@ -155,6 +160,75 @@ void UserInterface::drawLipForceSetup(const SharedStatus& s) {
   tft_.drawString("OK  Save       BACK  Cancel", 160, 215, 2);
 }
 
+void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
+  if (initialize) {
+    tft_.setTextDatum(ML_DATUM);
+    tft_.setTextColor(TFT_WHITE, BG);
+    if (s.state == AppState::EmgCalibrationMenu) {
+      static const char* items[] = {"DC reference & capture", "Capture rest baseline", "Reset EMG settings", "Return to Home"};
+      drawMenu(items, 4, s.menuIndex, 70);
+      tft_.drawString("BACK Return   uV gain: unverified", 18, 229, 1);
+    } else if (s.state == AppState::EmgReference) {
+      tft_.drawString("DMM: red SIG / black GND", 18, 57, 2);
+      tft_.drawString("UP / DOWN Adjust selected digit", 18, 164, 2);
+      tft_.drawString("Stable DC only; no person attached", 18, 186, 1);
+      tft_.drawString("BACK Cancel (old settings kept)", 18, 229, 1);
+    } else if (s.state == AppState::EmgBaseline) {
+      tft_.drawString("REST OUTPUT BASELINE", 18, 60, 2);
+      tft_.drawString("Relax muscle; hold electrodes still.", 18, 90, 2);
+      tft_.drawString("Not with open / floating electrodes.", 18, 116, 2);
+      tft_.drawString("Patient isolation must be verified.", 18, 142, 1);
+      tft_.drawString("OK Capture & save (4 seconds)", 18, 185, 2);
+      tft_.drawString("BACK Cancel", 18, 220, 2);
+    } else if (s.state == AppState::EmgReset) {
+      tft_.drawString("CLEAR THIS DEVICE'S DC + REST?", 18, 70, 2);
+      tft_.drawString("Pairing and WiFi stay unchanged.", 18, 110, 2);
+      tft_.drawString("OK Reset       BACK Cancel", 18, 210, 2);
+    } else {
+      tft_.drawString("Capturing signal for 4 seconds", 18, 70, 2);
+      tft_.drawString(s.message, 18, 100, 1);
+      tft_.drawString("Rejects clipping / unstable signal", 18, 174, 2);
+      tft_.drawString("BACK Cancel", 18, 220, 2);
+    }
+  }
+  char text[80];
+  tft_.setTextDatum(ML_DATUM);
+  if (s.state == AppState::EmgCalibrationMenu) {
+    tft_.fillRect(18, 39, 284, 25, BG);
+    tft_.setTextColor(MUTED, BG);
+    snprintf(text, sizeof(text), "DC:%s Rest:%s  %.0f mV", (s.emgCalibration.flags & 1) ? "set" : "unset",
+      (s.emgCalibration.flags & 2) ? "set" : "unset", s.emgCalibration.correctedMv(s.sample.emgOutputMv));
+    tft_.drawString(text, 18, 53, 1);
+    tft_.fillRect(18, 197, 284, 22, BG);
+    tft_.setTextColor(TFT_WHITE, BG);
+    tft_.drawString(s.message, 18, 208, 1);
+  } else if (s.state == AppState::EmgReference) {
+    char digits[5];
+    snprintf(digits, sizeof(digits), "%04u", s.emgReferenceMv);
+    for (uint8_t i = 0; i < 4; ++i) {
+      const uint16_t fill = i == s.emgDigit ? ACCENT : PANEL;
+      tft_.fillRoundRect(51 + i * 42, 80, 36, 40, 4, fill);
+      tft_.setTextColor(TFT_WHITE, fill);
+      char digit[2]{digits[i], 0};
+      tft_.drawString(digit, 61 + i * 42, 100, 4);
+    }
+    tft_.setTextColor(TFT_WHITE, BG);
+    tft_.drawString("mV", 229, 101, 2);
+    tft_.fillRect(18, 123, 284, 28, BG);
+    snprintf(text, sizeof(text), "ADC %u  %.0f mV (uncorrected)", s.sample.emgRaw, s.sample.emgOutputMv);
+    tft_.setTextColor(MUTED, BG);
+    tft_.drawString(text, 18, 138, 1);
+    tft_.fillRect(18, 199, 284, 22, BG);
+    tft_.setTextColor(TFT_CYAN, BG);
+    tft_.drawString(s.emgDigit < 3 ? "OK Next digit" : "OK Capture & save (4 seconds)", 18, 210, 2);
+  } else if (s.state == AppState::EmgCapture) {
+    tft_.fillRect(18, 120, 284, 36, BG);
+    snprintf(text, sizeof(text), "ADC %u    %.0f mV", s.sample.emgRaw, s.sample.emgOutputMv);
+    tft_.setTextColor(TFT_CYAN, BG);
+    tft_.drawString(text, 18, 138, 2);
+  }
+}
+
 void UserInterface::drawPairing(const SharedStatus& s) {
   tft_.fillRect(0, 36, 320, 204, BG);
   tft_.setTextDatum(MC_DATUM);
@@ -214,7 +288,7 @@ void UserInterface::drawMeasurement(const SharedStatus& s, bool initialize) {
   } else {
     current = s.sample.emgMicrovolts;
     if (isfinite(current)) snprintf(value, sizeof(value), "%.0f", current);
-    unit = "uV";
+    unit = "uV est";
   }
 
   if (isfinite(current)) {
@@ -228,9 +302,9 @@ void UserInterface::drawMeasurement(const SharedStatus& s, bool initialize) {
   tft_.fillRect(190, 37, 130, 34, BG);
   tft_.setTextDatum(MR_DATUM);
   tft_.setTextColor(saturated ? TFT_ORANGE : TFT_WHITE, BG);
-  tft_.drawString(value, 272, 51, 4);
+  tft_.drawString(value, s.examination == ExaminationType::Emg ? 250 : 272, 51, 4);
   tft_.setTextColor(MUTED, BG);
-  tft_.drawString(unit, 307, 51, 2);
+  tft_.drawString(unit, 307, 51, s.examination == ExaminationType::Emg ? 1 : 2);
 
   constexpr int16_t x0 = 40, y0 = 0, width = 267, height = 112;
   if (!plotReady_) return;
@@ -292,6 +366,22 @@ void UserInterface::drawResult(const SharedStatus& s) {
 }
 
 void UserInterface::render(const SharedStatus& s) {
+  const bool emgPage = s.state == AppState::EmgCalibrationMenu || s.state == AppState::EmgReference ||
+      s.state == AppState::EmgBaseline || s.state == AppState::EmgCapture || s.state == AppState::EmgReset;
+  if (emgPage) {
+    const bool initialize = s.state != lastState_ || s.menuIndex != lastMenuIndex_;
+    if (s.state != lastState_) drawFrame(s);
+    if (initialize || s.emgReferenceMv != lastEmgReferenceMv_ || s.emgDigit != lastEmgDigit_ ||
+        millis() - lastValuesDraw_ >= 250) {
+      drawEmgCalibration(s, initialize);
+      lastValuesDraw_ = millis();
+      lastEmgReferenceMv_ = s.emgReferenceMv;
+      lastEmgDigit_ = s.emgDigit;
+    }
+    lastState_ = s.state;
+    lastMenuIndex_ = s.menuIndex;
+    return;
+  }
   const bool pageChanged = s.state != lastState_;
   const bool menuChanged = !pageChanged && s.menuIndex != lastMenuIndex_ &&
       (s.state == AppState::Home || s.state == AppState::ExaminationMenu || s.state == AppState::Settings);

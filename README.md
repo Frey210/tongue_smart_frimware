@@ -35,8 +35,8 @@ Secret tidak dicetak ke LCD/serial dan backend hanya menyimpan hash. NVS menyimp
 ```powershell
 cd D:\Aerasea\tongue_smart\frimware
 pio run
-pio run -t upload
-pio device monitor
+pio run -t upload --upload-port COM20
+pio device monitor --port COM20
 ```
 
 Jika `pio` belum tersedia: `py -m pip install platformio`, lalu gunakan `py -m platformio run`.
@@ -49,7 +49,7 @@ Sebelum dipakai secara klinis, tentukan dan validasi:
 
 1. `HX711_COUNTS_PER_NEWTON` dan offset HX711;
 2. `FSR_ZERO_ADC` serta kurva ADC-ke-kPa FSR (bukan sekadar skala linear);
-3. `EMG_ADC_BIAS` dan `EMG_FRONTEND_GAIN` sesuai rangkaian analog;
+3. EMG: **Home > Calibration** untuk referensi DC multimeter dan baseline yang tersimpan per perangkat. Lihat [EMG_CALIBRATION.md](EMG_CALIBRATION.md). Gain `EMG_FRONTEND_GAIN` masih asumsi; keluaran uV belum terverifikasi;
 4. baseline, filtering, sample rate, dan satuan EMG;
 5. batas gerak, homing, `STEPPER_DIR_INVERTED`, kecepatan, dan emergency stop stepper;
 6. target akurasi, prosedur kalibrasi, serta acceptance test perangkat.
