@@ -4,6 +4,8 @@ import csv
 import json
 import math
 import html
+import subprocess
+import sys
 from pathlib import Path
 import statistics
 import time
@@ -101,6 +103,32 @@ def ask(text, exact=None):
         raise RuntimeError("Konfirmasi tidak cocok; tahap manusia tidak dijalankan")
 
 
+class LiveSession:
+    def __init__(self, folder):
+        self.folder = folder
+        self.state = {"stage": "idle", "state": "waiting"}
+
+    def update(self, **values):
+        self.state.update(values)
+        temporary = self.folder / "live.tmp"
+        try:
+            temporary.write_text(json.dumps(self.state, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self.folder / "live.json")
+        except OSError:
+            # Display metadata may retry on the next update; never interrupt capture for a busy viewer file.
+            pass
+
+    def check_stop(self):
+        if (self.folder / "stop.request").exists():
+            raise KeyboardInterrupt
+
+    def wait(self, seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.check_stop()
+            time.sleep(min(.05, max(0, deadline - time.monotonic())))
+
+
 class Device:
     def __init__(self, port):
         import serial
@@ -135,14 +163,21 @@ class Device:
                     return info
         raise RuntimeError("Firmware diagnostik tidak menjawab pada 460800 baud. Upload environment emg-diagnostic.")
 
-    def capture(self, stage, seconds, destination):
+    def capture(self, stage, seconds, destination, live=None):
         rows = []
+        if live:
+            live.check_stop()
         self.send(f"start {stage} {seconds}")
-        deadline = time.monotonic() + seconds + 10
+        started = time.monotonic()
+        deadline = started + seconds + 10
+        next_flush = started
         with destination.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
             writer.writerow(["sequence", "elapsed_us", "adc_count", "adc_output_mv"])
+            handle.flush()
             while time.monotonic() < deadline:
+                if live:
+                    live.check_stop()
                 for line in self.lines():
                     if line.startswith("S,"):
                         fields = line.split(",")
@@ -159,6 +194,12 @@ class Device:
                             raise RuntimeError(str(event))
                         if event.get("ended") == stage:
                             return rows, event
+                now = time.monotonic()
+                if now >= next_flush:
+                    handle.flush()
+                    if live:
+                        live.update(samples=len(rows), remaining_seconds=max(0, seconds - (now - started)))
+                    next_flush = now + .05
         self.send("stop")
         raise RuntimeError("Capture timeout; data parsial disimpan, hasil tidak diterima")
 
@@ -169,7 +210,8 @@ def save_report(folder, report):
         report["relative_profile"] = {"accepted": False, "reason": "Sesi lengkap belum selesai; tidak ada profil yang diterapkan"}
     (folder / "hasil.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     text = ["# Hasil karakterisasi EMG", "", f"Device: {report['device']['device_id']}",
-            f"Lokasi: {report['site']}", f"Status sesi: {report['status']}", "",
+            f"Lokasi: {report['site']}", f"Status sesi: {report['status']}",
+            f"Kondisi daya: {report.get('power_condition', 'tidak dicatat')}", "",
             "Nilai mV adalah keluaran modul. Bukan amplitudo input EMG dalam uV.", "",
             "| Tahap | Sampel | Hz | Mean mV | RMS terpusat mV | Clip % | Pemeriksaan |",
             "|---|---:|---:|---:|---:|---:|---|"]
@@ -220,6 +262,8 @@ def main():
     parser.add_argument("--site", choices=["unspecified", "masseter_left", "masseter_right", "temporalis_left", "temporalis_right"], default="unspecified")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[2] / "output" / "emg_wizard")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--live-plot", action="store_true", help="Buka grafik live Python dalam jendela terpisah")
+    parser.add_argument("--power-condition", default="tidak dicatat", help="Kondisi catu daya aktual menurut operator")
     args = parser.parse_args()
     if args.self_test:
         self_test()
@@ -227,30 +271,49 @@ def main():
     device = Device(args.port)
     report = None
     folder = None
+    live = None
     try:
         info = device.identity()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
         folder = args.output / (info["device_id"] + "_" + stamp)
         folder.mkdir(parents=True)
         report = {"schema": 1, "device": info, "site": args.site, "started_utc": stamp,
-                  "status": "in_progress", "stages": {}, "patient_isolation_confirmed_by_operator": False}
+                  "status": "in_progress", "stages": {}, "patient_isolation_confirmed_by_operator": False,
+                  "power_condition": args.power_condition}
         save_report(folder, report)
+        live = LiveSession(folder)
+        live.update(device_id=info["device_id"], site=args.site, power_condition=args.power_condition,
+                    instruction="Menunggu kesiapan operator", target_seconds=args.seconds)
+        if args.live_plot:
+            viewer_script = Path(__file__).with_name("emg_live_plot.py")
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen([sys.executable, str(viewer_script), str(folder)], creationflags=flags)
         print(f"Device {info['device_id']}. Gerak motor/jaringan nonaktif. q pada prompt; Ctrl+C atau BACK saat rekaman.")
 
+        def prompt(text, exact=None):
+            live.update(state="waiting", instruction=text)
+            live.check_stop()
+            ask(text, exact)
+            live.check_stop()
+
         def record(name, instruction, seconds, baseline=None):
-            ask(instruction + "\nTekan Enter jika siap; q untuk batal.")
+            prompt(instruction + "\nTekan Enter jika siap; q untuk batal.")
             for value in (3, 2, 1):
+                live.update(state="countdown", stage=name, instruction=instruction, remaining_seconds=value,
+                            target_seconds=seconds, samples=0)
                 print(f"Mulai dalam {value}...", flush=True)
-                time.sleep(1)
+                live.wait(1)
             print(f"REKAM {name}: {seconds} detik. Tombol BACK alat menghentikan capture.", flush=True)
             started_utc = datetime.now(timezone.utc).isoformat()
-            rows, event = device.capture(name, seconds, folder / f"{name}.csv")
+            live.update(state="capturing", remaining_seconds=seconds)
+            rows, event = device.capture(name, seconds, folder / f"{name}.csv", live)
             save_trace(folder / f"{name}.svg", rows, name)
             metrics = summarize(rows, event, seconds, baseline)
             metrics["started_utc"] = started_utc
             metrics["ended_utc"] = datetime.now(timezone.utc).isoformat()
             report["stages"][name] = metrics
             save_report(folder, report)
+            live.update(state="stage_complete", instruction=metrics["reason"], samples=len(rows), remaining_seconds=0)
             print(f"{name}: {metrics.get('reason')}; clipping {metrics.get('clipped_percent', 0):.2f}%", flush=True)
             if not metrics.get("acquisition_ok") or (name != "open" and not metrics["usable"]):
                 raise RuntimeError("Tahap ditolak. Periksa pemasangan/saturasi; ulang wizard sebelum melanjutkan.")
@@ -260,7 +323,7 @@ def main():
         if args.bench_only:
             report["status"] = "bench_complete"
             return
-        ask("TAHAP MANUSIA. Pastikan isolasi listrik dari adaptor, USB/laptop, dan alat ukur telah diverifikasi.\n"
+        prompt("TAHAP MANUSIA. Pastikan isolasi listrik dari adaptor, USB/laptop, dan alat ukur telah diverifikasi.\n"
             "Pemasangan/protokol wajah dipandu dokter/peneliti. Hentikan bila nyeri atau tidak nyaman.\n"
             "Ketik ISOLASI TERVERIFIKASI untuk melanjutkan.", "ISOLASI TERVERIFIKASI")
         report["patient_isolation_confirmed_by_operator"] = True
@@ -269,18 +332,21 @@ def main():
         rest = record("rest", "TAHAP 2. Pasang elektroda sesuai protokol dan identitas kabel yang telah diperiksa.\n"
                       "Duduk tenang, rahang rileks, jangan berbicara atau mengunyah. Pastikan kontak elektroda sudah stabil.", args.seconds)
         baseline = rest["output_mean_mv"]
+        live.update(baseline_mv=baseline)
         for i in range(1, 4):
             if i > 1:
-                ask("Rileks dan pulihkan kenyamanan sebelum ulangan berikutnya. Enter mulai jeda 30 detik; q batal.")
+                prompt("Rileks dan pulihkan kenyamanan sebelum ulangan berikutnya. Enter mulai jeda 30 detik; q batal.")
                 for remaining in (30, 20, 10):
                     print(f"Jeda istirahat: {remaining} detik", flush=True)
-                    time.sleep(10)
+                    live.update(state="resting", instruction="Rileks; belum ada rekaman", remaining_seconds=remaining)
+                    live.wait(10)
             record(f"clench_{i}", f"TAHAP 3, ulangan {i}/3. Ikuti instruksi dokter untuk menggigit dengan nyaman selama 3 detik.\n"
                    "Jangan memaksakan kontraksi maksimal. Jangan ubah elektroda. Hentikan jika nyeri.", 3, baseline)
-        ask("Rileks sebelum tahap aktivitas. Enter mulai jeda 30 detik; q batal.")
+        prompt("Rileks sebelum tahap aktivitas. Enter mulai jeda 30 detik; q batal.")
         for remaining in (30, 20, 10):
             print(f"Jeda istirahat: {remaining} detik", flush=True)
-            time.sleep(10)
+            live.update(state="resting", instruction="Rileks; belum ada rekaman", remaining_seconds=remaining)
+            live.wait(10)
         record("chew", "TAHAP 4. Lakukan gerakan mengunyah ringan sesuai protokol dokter.\n"
                "Tidak perlu makanan untuk tes ini. Hindari menarik kabel atau menggeser elektroda.", args.seconds, baseline)
         record("recovery", "TAHAP 5. Kembali rileks, tanpa mengunyah atau berbicara.", args.seconds, baseline)
@@ -303,6 +369,8 @@ def main():
             device.serial.close()
         if report and folder:
             save_report(folder, report)
+            if live:
+                live.update(state=report["status"], instruction=report.get("error", report["relative_profile"]["reason"]))
             print(f"Hasil tersimpan: {folder}")
 
 

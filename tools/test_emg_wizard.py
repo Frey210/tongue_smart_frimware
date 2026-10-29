@@ -65,6 +65,21 @@ class WizardTests(unittest.TestCase):
             saved = json.loads((Path(directory) / "hasil.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["status"], "cancelled")
 
+    def test_live_stop_request_prevents_capture_start(self):
+        device = wizard.Device.__new__(wizard.Device)
+        device.serial = FakeSerial(b"")
+        device.buffer = b""
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            live = wizard.LiveSession(folder)
+            live.update(stage="open", state="waiting")
+            state = json.loads((folder / "live.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["stage"], "open")
+            (folder / "stop.request").touch()
+            with self.assertRaises(KeyboardInterrupt):
+                device.capture("open", 1, folder / "capture.csv", live)
+            self.assertEqual(device.serial.written, b"")
+
 
 if __name__ == "__main__":
     unittest.main()

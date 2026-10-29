@@ -35,6 +35,28 @@ ADC raw dan mV adalah dua konversi berurutan. Timing nyata, kehilangan sampel
 dan clipping dicatat, sehingga target 1000 Hz tidak dianggap jaminan performa.
 Tidak ada klaim bandwidth / filtering sEMG medis dari konfigurasi ini.
 
+## Grafik live Python
+
+```powershell
+python -u tools\emg_wizard.py --port COM20 --site masseter_right --live-plot --power-condition "Adaptor eksternal terpasang; isolasi diverifikasi operator"
+```
+
+Matplotlib dan Tkinter membuka jendela grafik terpisah. Hanya wizard membuka
+COM; viewer membaca CSV yang di-flush setiap 50 ms. Grafik diperbarui sekitar
+10 kali/detik, sementara firmware tetap menargetkan 1000 sampel/detik.
+Pilih jendela 1/2/5/10 detik. Sumbu atas: mV keluaran modul; bawah: ADC count,
+dengan batas clipping. Garis putus-putus menunjukkan baseline setelah rest.
+Jeda grafik hanya menjeda tampilan; akuisisi tetap berjalan. Jeda dahulu untuk
+zoom/pan memakai toolbar. Nilai clipping di jendela dihitung dari seluruh
+sampel tahap yang telah dibaca, bukan hanya titik yang tampak.
+
+Tombol Hentikan tes dan penutupan jendela meminta pembatalan. Saat merekam,
+wizard berhenti dan menyimpan data parsial. Jika wizard sedang menunggu input,
+tekan Enter pada terminal untuk menyelesaikan pembatalan; guard mencegah tahap
+berikutnya dimulai. Setiap sesi memakai folder baru dan kondisi daya dicatat.
+Matplotlib/Tkinter diperlukan hanya untuk viewer; uji tanpa grafik tetap bisa
+dijalankan seperti sebelumnya.
+
 ## Urutan
 
 1. **Open, 10 detik:** semua elektroda lepas dari tubuh dan tidak disentuh.
