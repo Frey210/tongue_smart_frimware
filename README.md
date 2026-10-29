@@ -32,6 +32,9 @@ Secret tidak dicetak ke LCD/serial dan backend hanya menyimpan hash. NVS menyimp
 
 ## Build dan upload
 
+Wizard tes EMG bertahap (image khusus, motor/jaringan OFF):
+[EMG_WIZARD.md](EMG_WIZARD.md).
+
 ```powershell
 cd D:\Aerasea\tongue_smart\frimware
 pio run
