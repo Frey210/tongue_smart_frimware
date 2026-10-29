@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import emg_wizard as wizard
 
@@ -79,6 +80,13 @@ class WizardTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 device.capture("open", 1, folder / "capture.csv", live)
             self.assertEqual(device.serial.written, b"")
+
+    def test_expected_error_returns_failure_and_closes_serial(self):
+        with patch.object(wizard, "Device") as device, patch("sys.argv", ["emg_wizard.py", "--port", "TEST"]):
+            device.return_value.identity.side_effect = RuntimeError("Perangkat tidak menjawab")
+            self.assertEqual(wizard.main(), 1)
+            device.return_value.send.assert_called_with("stop")
+            device.return_value.serial.close.assert_called_once()
 
 
 if __name__ == "__main__":

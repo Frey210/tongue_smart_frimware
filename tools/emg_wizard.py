@@ -359,6 +359,9 @@ def main():
         if report:
             report["status"] = "failed"
             report["error"] = str(exc)
+        if isinstance(exc, RuntimeError):
+            print(f"Pengujian dihentikan: {exc}", file=sys.stderr)
+            return 1
         raise
     finally:
         try:
@@ -375,4 +378,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)
