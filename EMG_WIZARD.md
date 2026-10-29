@@ -59,6 +59,13 @@ dijalankan seperti sebelumnya.
 
 ## Urutan
 
+Untuk mengulang referensi dengan elektroda masih stabil pada lokasi yang sama,
+tambahkan `--repeat-reference`. Mode ini merekam rest baru, tiga kontraksi nyaman
+dengan jeda 30 detik, lalu recovery; open dan chew tidak direkam atau disalin dari
+sesi lain. Konfirmasi isolasi dan seluruh pemeriksaan kualitas tetap wajib.
+Setiap pengulangan disimpan sebagai sesi baru dengan `protocol=repeat_reference`.
+Mode ini tidak dapat digabung dengan `--bench-only`.
+
 1. **Open, 10 detik:** semua elektroda lepas dari tubuh dan tidak disentuh.
    Tujuan: melihat input terbuka, clipping, dan gangguan. Bukan baseline otot.
 2. **Rest, 10 detik:** elektroda terpasang sesuai protokol dokter, kontak telah

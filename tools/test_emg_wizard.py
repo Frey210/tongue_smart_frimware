@@ -26,6 +26,24 @@ class FakeSerial:
 
 
 class WizardTests(unittest.TestCase):
+    def test_repeat_reference_records_only_attached_stages(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(wizard, "Device") as device, \
+                patch.object(wizard, "ask"), patch.object(wizard.LiveSession, "wait"), \
+                patch("sys.argv", ["emg_wizard.py", "--repeat-reference", "--site", "masseter_right", "--output", directory]):
+            device.return_value.identity.return_value = {"device_id": "TEST"}
+            def capture(stage, seconds, destination, live):
+                amplitude = 1 if stage in ("rest", "recovery") else 30
+                rows = [(i, i * 1000, 1500, 1500 + amplitude * (1 if i % 2 else -1)) for i in range(seconds * 1000)]
+                return rows, {"duration_us": seconds * 1000000, "acquired": len(rows), "lost": 0}
+            device.return_value.capture.side_effect = capture
+            wizard.main()
+            stages = [call.args[0] for call in device.return_value.capture.call_args_list]
+            self.assertEqual(stages, ["rest", "clench_1", "clench_2", "clench_3", "recovery"])
+            report = json.loads(next(Path(directory).glob("*/hasil.json")).read_text(encoding="utf-8"))
+            self.assertEqual(report["protocol"], "repeat_reference")
+            self.assertEqual(report["status"], "complete")
+            self.assertTrue(report["relative_profile"]["accepted"])
+
     def test_quality_and_normalization_checks(self):
         wizard.self_test()
 

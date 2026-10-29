@@ -258,6 +258,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="COM20")
     parser.add_argument("--bench-only", action="store_true", help="Hanya elektroda lepas; tidak ada tahap manusia")
+    parser.add_argument("--repeat-reference", action="store_true", help="Elektroda tetap terpasang: ulang rest, tiga kontraksi, recovery; tanpa open/chew")
     parser.add_argument("--seconds", type=int, default=10, choices=range(3, 31), metavar="3-30")
     parser.add_argument("--site", choices=["unspecified", "masseter_left", "masseter_right", "temporalis_left", "temporalis_right"], default="unspecified")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[2] / "output" / "emg_wizard")
@@ -265,6 +266,8 @@ def main():
     parser.add_argument("--live-plot", action="store_true", help="Buka grafik live Python dalam jendela terpisah")
     parser.add_argument("--power-condition", default="tidak dicatat", help="Kondisi catu daya aktual menurut operator")
     args = parser.parse_args()
+    if args.repeat_reference and args.bench_only:
+        parser.error("--repeat-reference tidak dapat digabung dengan --bench-only")
     if args.self_test:
         self_test()
         return
@@ -279,7 +282,8 @@ def main():
         folder.mkdir(parents=True)
         report = {"schema": 1, "device": info, "site": args.site, "started_utc": stamp,
                   "status": "in_progress", "stages": {}, "patient_isolation_confirmed_by_operator": False,
-                  "power_condition": args.power_condition}
+                  "power_condition": args.power_condition,
+                  "protocol": "repeat_reference" if args.repeat_reference else "full"}
         save_report(folder, report)
         live = LiveSession(folder)
         live.update(device_id=info["device_id"], site=args.site, power_condition=args.power_condition,
@@ -319,7 +323,8 @@ def main():
                 raise RuntimeError("Tahap ditolak. Periksa pemasangan/saturasi; ulang wizard sebelum melanjutkan.")
             return metrics
 
-        record("open", "TAHAP 1. Lepaskan semua elektroda dari tubuh. Jangan sentuh kontak elektroda. Ini pemeriksaan input terbuka, bukan baseline otot.", args.seconds)
+        if not args.repeat_reference:
+            record("open", "TAHAP 1. Lepaskan semua elektroda dari tubuh. Jangan sentuh kontak elektroda. Ini pemeriksaan input terbuka, bukan baseline otot.", args.seconds)
         if args.bench_only:
             report["status"] = "bench_complete"
             return
@@ -342,13 +347,14 @@ def main():
                     live.wait(10)
             record(f"clench_{i}", f"TAHAP 3, ulangan {i}/3. Ikuti instruksi dokter untuk menggigit dengan nyaman selama 3 detik.\n"
                    "Jangan memaksakan kontraksi maksimal. Jangan ubah elektroda. Hentikan jika nyeri.", 3, baseline)
-        prompt("Rileks sebelum tahap aktivitas. Enter mulai jeda 30 detik; q batal.")
-        for remaining in (30, 20, 10):
-            print(f"Jeda istirahat: {remaining} detik", flush=True)
-            live.update(state="resting", instruction="Rileks; belum ada rekaman", remaining_seconds=remaining)
-            live.wait(10)
-        record("chew", "TAHAP 4. Lakukan gerakan mengunyah ringan sesuai protokol dokter.\n"
-               "Tidak perlu makanan untuk tes ini. Hindari menarik kabel atau menggeser elektroda.", args.seconds, baseline)
+        if not args.repeat_reference:
+            prompt("Rileks sebelum tahap aktivitas. Enter mulai jeda 30 detik; q batal.")
+            for remaining in (30, 20, 10):
+                print(f"Jeda istirahat: {remaining} detik", flush=True)
+                live.update(state="resting", instruction="Rileks; belum ada rekaman", remaining_seconds=remaining)
+                live.wait(10)
+            record("chew", "TAHAP 4. Lakukan gerakan mengunyah ringan sesuai protokol dokter.\n"
+                   "Tidak perlu makanan untuk tes ini. Hindari menarik kabel atau menggeser elektroda.", args.seconds, baseline)
         record("recovery", "TAHAP 5. Kembali rileks, tanpa mengunyah atau berbicara.", args.seconds, baseline)
         report["status"] = "complete"
     except KeyboardInterrupt:
