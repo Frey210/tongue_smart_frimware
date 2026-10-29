@@ -107,6 +107,18 @@ pembanding EMG yang tervalidasi dengan kondisi pengukuran setara.
 - CEDE amplitude normalization: https://pubmed.ncbi.nlm.nih.gov/32569878/
 - Pengaruh metode referensi pada otot pengunyahan: https://pubmed.ncbi.nlm.nih.gov/27552696/
 
+## Tinjauan interferensi setelah sesi lengkap
+
+```powershell
+python tools\emg_review.py ..\output\emg_wizard\<folder-sesi>
+```
+
+Menambahkan `review.md` dan `review.json`, tanpa mengubah CSV/hasil.json asli.
+Fit least-squares DC dan satu sinusoid mencari komponen 49–51 Hz. Persentase
+variasi yang dijelaskan fit bukan persentase noise yang diketahui pasti, bukan
+amplitudo input EMG, dan bukan diagnosis. Sumber gangguan tetap perlu diperiksa.
+Tes: `python -m unittest discover -s tools -p "test_emg_*.py"`.
+
 ## Kembali ke firmware aplikasi
 
 Setelah tes selesai dan elektroda dilepas dari tubuh:
