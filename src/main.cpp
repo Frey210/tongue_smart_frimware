@@ -14,6 +14,7 @@
 #include "types.h"
 #include "ui.h"
 #include "emg_calibration_selftest.h"
+#include "emg_envelope.h"
 
 QueueHandle_t gSensorQueue, gButtonQueue, gMotorQueue, gStorageQueue, gSensorCommandQueue, gWifiCommandQueue, gSyncQueue,
     gRemoteMeasurementQueue;
@@ -75,7 +76,7 @@ static void sensorTask(void*) {
   scale.begin(hw::HX711_DT, hw::HX711_SCK);
   scale.set_scale(cfg::HX711_COUNTS_PER_NEWTON);
   scale.set_offset(cfg::HX711_OFFSET);
-  float emgEma = 0;
+  EmgEnvelope emgEnvelope;
   EmgCalibration lastCalibration;
   TickType_t wake = xTaskGetTickCount();
   for (;;) {
@@ -103,12 +104,11 @@ static void sensorTask(void*) {
     xSemaphoreTake(gStatusMutex, portMAX_DELAY);
     const EmgCalibration calibration = gStatus.emgCalibration;
     xSemaphoreGive(gStatusMutex);
-    if (memcmp(&calibration, &lastCalibration, sizeof(calibration)) != 0) emgEma = 0;
+    if (memcmp(&calibration, &lastCalibration, sizeof(calibration)) != 0) emgEnvelope.reset();
     lastCalibration = calibration;
-    const float emgUv = fabsf(calibration.correctedMv(sample.emgOutputMv) - calibration.baselineMv) *
-                        1000.0F / cfg::EMG_FRONTEND_GAIN;
-    emgEma += cfg::EMG_ENVELOPE_ALPHA * (emgUv - emgEma);
-    sample.emgMicrovolts = isfinite(emgEma) ? emgEma : 0;
+    const float centeredMv = calibration.correctedMv(sample.emgOutputMv) - calibration.baselineMv;
+    sample.emgMicrovolts = emgEnvelope.update(centeredMv, sample.timestampMs) *
+                          1000.0F / cfg::EMG_FRONTEND_GAIN;
     sample.pressureKpa = max(0.0F, (static_cast<float>(sample.fsrRaw) - cfg::FSR_ZERO_ADC) * cfg::FSR_KPA_PER_COUNT);
     sample.fsrSaturated = sample.fsrRaw >= cfg::ADC_SATURATION_COUNT;
     sample.hx711Ready = scale.is_ready();
@@ -570,7 +570,8 @@ static void communicationTask(void*) {
       if (c == '\n') {
         line.trim();
         if (line == "emg_selftest") {
-          Serial.printf("{\"emg_selftest\":\"%s\"}\n", emgCalibrationSelftest() ? "passed" : "failed");
+          Serial.printf("{\"emg_selftest\":\"%s\",\"envelope_selftest\":\"%s\"}\n",
+            emgCalibrationSelftest() ? "passed" : "failed", emgEnvelopeSelftest() ? "passed" : "failed");
         } else if (line == "emg_status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           const SensorSample sample = gStatus.sample;

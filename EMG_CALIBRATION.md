@@ -39,8 +39,17 @@ corrected output mV = ADC output mV + saved DC correction mV
 estimated input uV = abs(corrected output mV - saved rest output mV) * 1000 / assumed gain
 ```
 
-The existing exponential envelope smoothing remains. This is not raw signed
-sEMG, not an RMS calculation, and not a verified input-referred uV measurement.
+Since 0.6.1 the centered output uses a rolling RMS over 25 samples (nominal
+250 ms at 100 Hz), followed by time-based EMA with a 150 ms time constant.
+The formula is RMS = sqrt(mean(centered output mV squared)), then
+EMA += (1 - exp(-elapsed_ms / 150)) * (RMS - EMA).
+The window averages available samples during startup. Calibration changes,
+non-finite input and acquisition gaps over 100 ms reset the envelope.
+This reduces indicator jitter, adds response delay and changes amplitude
+semantics from the former rectified EMA. It does not reject mains interference,
+repair saturation or compensate unstable electrode contact. Raw ADC/mV and
+existing validity checks remain unchanged. No baseline is learned automatically.
+This is not raw signed sEMG or a verified input-referred uV measurement.
 The gain remains unverified at 1000. LCD measurement units say `uV est`.
 For API compatibility, web packets still use `uV`; historical records are not
 recalculated. Do not compare pre-0.6.0 and post-0.6.0 values as one calibrated series.
@@ -94,7 +103,8 @@ BACK retains the profile. Reset affects neither pairing nor Wi-Fi.
 - `emg_status`: raw count, ADC output mV, corrected mV, correction, baseline,
   saved DMM reference, flags, device ID, firmware and estimated uV.
 - `emg_selftest`: non-mutating checks of conversion, rejected values, stable,
-  clipped, noisy and insufficient-sample capture. Does not move the motor.
+  clipped, noisy and insufficient-sample capture, plus envelope steady-state,
+  decay, acquisition-gap reset and timestamp-wrap checks. Does not move the motor.
 
 Flags: 0 = unset, 1 = DC saved, 2 = rest saved, 3 = both saved.
 Flags describe what was stored, never certify gain, accuracy or patient safety.
