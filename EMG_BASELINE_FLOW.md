@@ -71,3 +71,26 @@ Do not run a baseline capture on a person without independent electrical safety
 verification. GUI/bench guards do not certify patient safety.
 
 Reference: https://github.com/Seeed-Studio/Grove_EMG_detector_demo_code
+
+## Verification record - 2026-10-30
+
+- Production firmware code commit: 229ca9c, version 0.7.0. PlatformIO build and
+  upload to COM20 completed with flash verification. Electrodes were removed;
+  motor safety was confirmed by the operator before upload.
+- Device serial self-tests: EMG, envelope and resting-baseline tests passed.
+  Observed frame rate was 100 Hz; 12 status snapshots contained no reset marker.
+  This is a short bench check, not a long-duration stability guarantee.
+- Backend ea5994a: 12 tests passed, including confirmation/device-ack gates,
+  wrong electrode site, stale controls, cancellation and ingestion guards.
+- Frontend 4156485: production build passed. Playwright used isolated mocked
+  API responses to test preparation, review, device acknowledgement, recording,
+  cancellation/retry and mobile overflow; desktop/tablet/mobile screenshots
+  are in output/screenshots/emg-baseline-20261030 in the workspace.
+- Deployment through Tailscale completed. Public HTTPS /health returned ok,
+  /ready returned ready, and the new frontend asset was verified. The live
+  backend exposes the baseline endpoint and has the emg_baselines table.
+- No new electrode-on-body capture or live device-to-web examination was
+  performed in this verification. Operator acceptance testing remains required.
+- Frontend dependency audit reported three high-severity findings (nanoid,
+  source-map-js, vite). Dependency remediation is outstanding; no automatic
+  dependency upgrade was bundled into this sensor workflow change.
