@@ -52,6 +52,7 @@ const char* UserInterface::stateName(AppState s) {
     case AppState::EmgBaseline: return "REST BASELINE";
     case AppState::EmgCapture: return "CAPTURING";
     case AppState::EmgReset: return "RESET EMG";
+    case AppState::EmgReview: return "BASELINE EMG";
   }
   return "";
 }
@@ -174,20 +175,24 @@ void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
       tft_.drawString("Stable DC only; no person attached", 18, 186, 1);
       tft_.drawString("BACK Cancel (old settings kept)", 18, 229, 1);
     } else if (s.state == AppState::EmgBaseline) {
-      tft_.drawString("REST OUTPUT BASELINE", 18, 60, 2);
-      tft_.drawString("Relax muscle; hold electrodes still.", 18, 90, 2);
-      tft_.drawString("Not with open / floating electrodes.", 18, 116, 2);
-      tft_.drawString("Patient isolation must be verified.", 18, 142, 1);
-      tft_.drawString("OK Capture & save (4 seconds)", 18, 185, 2);
-      tft_.drawString("BACK Cancel", 18, 220, 2);
+      tft_.drawString("1. Pasang elektroda sesuai lokasi", 18, 62, 2);
+      tft_.drawString("2. Rileks; jangan bicara / mengunyah", 18, 90, 2);
+      tft_.drawString("3. Tunggu kontak elektroda stabil", 18, 118, 2);
+      tft_.drawString("Isolasi listrik harus sudah diverifikasi.", 18, 147, 1);
+      tft_.drawString("OK Mulai baseline 10 detik", 18, 187, 2);
+      tft_.drawString("BACK Batal - baseline lama tetap", 18, 221, 1);
+    } else if (s.state == AppState::EmgReview) {
+      tft_.drawString("Hasil baseline istirahat", 18, 62, 2);
+      tft_.drawString("uV masih estimasi; gain belum diuji", 18, 88, 1);
+      tft_.drawString(s.baselineSessionId[0] ? "Konfirmasi / ulangi dari dashboard" : "OK Simpan / lanjut   BACK Batal", 18, 222, 1);
     } else if (s.state == AppState::EmgReset) {
       tft_.drawString("CLEAR THIS DEVICE'S DC + REST?", 18, 70, 2);
       tft_.drawString("Pairing and WiFi stay unchanged.", 18, 110, 2);
       tft_.drawString("OK Reset       BACK Cancel", 18, 210, 2);
     } else {
-      tft_.drawString("Capturing signal for 4 seconds", 18, 70, 2);
+      tft_.drawString(strcmp(s.baselineState, "capturing") == 0 ? "Rileks - baseline 10 detik" : "Capturing DC for 4 seconds", 18, 70, 2);
       tft_.drawString(s.message, 18, 100, 1);
-      tft_.drawString("Rejects clipping / unstable signal", 18, 174, 2);
+      tft_.drawString("Saturasi / sinyal tidak stabil ditolak", 18, 188, 1);
       tft_.drawString("BACK Cancel", 18, 220, 2);
     }
   }
@@ -222,10 +227,31 @@ void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
     tft_.setTextColor(TFT_CYAN, BG);
     tft_.drawString(s.emgDigit < 3 ? "OK Next digit" : "OK Capture & save (4 seconds)", 18, 210, 2);
   } else if (s.state == AppState::EmgCapture) {
-    tft_.fillRect(18, 120, 284, 36, BG);
-    snprintf(text, sizeof(text), "ADC %u    %.0f mV", s.sample.emgRaw, s.sample.emgOutputMv);
+    tft_.fillRect(18, 116, 284, 60, BG);
+    snprintf(text, sizeof(text), "ADC avg %u    %.0f mV", s.sample.emgAverageRaw, s.sample.emgOutputMv);
     tft_.setTextColor(TFT_CYAN, BG);
-    tft_.drawString(text, 18, 138, 2);
+    tft_.drawString(text, 18, 129, 2);
+    if (strcmp(s.baselineState, "capturing") == 0) {
+      snprintf(text, sizeof(text), s.countdown ? "Mulai dalam %u..." : "Terekam %u%%", s.countdown ? s.countdown : s.progress);
+      tft_.drawString(text, 18, 153, 2);
+      tft_.fillRect(18, 170, 284, 4, PANEL);
+      tft_.fillRect(18, 170, 284 * s.progress / 100, 4, TFT_CYAN);
+    }
+  } else if (s.state == AppState::EmgReview) {
+    tft_.fillRect(18, 106, 284, 99, BG);
+    tft_.setTextColor(TFT_WHITE, BG);
+    if (!s.restCandidate.samples) {
+      tft_.drawString("Tidak ada hasil baseline tersimpan", 18, 120, 2);
+      tft_.drawString(s.baselineReason, 18, 165, 1);
+      return;
+    }
+    snprintf(text, sizeof(text), "Mean %.1f mV  Noise %.1f mV", s.restCandidate.meanMv, s.restCandidate.noiseMv());
+    tft_.drawString(text, 18, 120, 2);
+    snprintf(text, sizeof(text), "Drift %.1f mV   %lu sampel", s.restCandidate.driftMv(), static_cast<unsigned long>(s.restCandidate.samples));
+    tft_.drawString(text, 18, 145, 1);
+    tft_.setTextColor(strcmp(s.baselineState, "failed") == 0 ? TFT_ORANGE : TFT_CYAN, BG);
+    tft_.drawString(s.baselineReason, 18, 171, 1);
+    tft_.drawString(s.message, 18, 195, 1);
   }
 }
 
@@ -367,7 +393,7 @@ void UserInterface::drawResult(const SharedStatus& s) {
 
 void UserInterface::render(const SharedStatus& s) {
   const bool emgPage = s.state == AppState::EmgCalibrationMenu || s.state == AppState::EmgReference ||
-      s.state == AppState::EmgBaseline || s.state == AppState::EmgCapture || s.state == AppState::EmgReset;
+      s.state == AppState::EmgBaseline || s.state == AppState::EmgCapture || s.state == AppState::EmgReset || s.state == AppState::EmgReview;
   if (emgPage) {
     const bool initialize = s.state != lastState_ || s.menuIndex != lastMenuIndex_;
     if (s.state != lastState_) drawFrame(s);

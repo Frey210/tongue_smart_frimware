@@ -78,6 +78,7 @@ static void sensorTask(void*) {
   scale.set_offset(cfg::HX711_OFFSET);
   EmgEnvelope emgEnvelope;
   EmgCalibration lastCalibration;
+  uint32_t emgFrameSequence = 0;
   TickType_t wake = xTaskGetTickCount();
   for (;;) {
     SensorCommand command{};
@@ -98,8 +99,17 @@ static void sensorTask(void*) {
 
     SensorSample sample{};
     sample.timestampMs = millis();
-    sample.emgRaw = analogRead(hw::EMG_ADC);
-    sample.emgOutputMv = analogReadMilliVolts(hw::EMG_ADC);
+    sample.emgFrameSequence = ++emgFrameSequence;
+    uint32_t emgRawSum = 0, emgMvSum = 0;
+    for (unsigned i = 0; i < cfg::EMG_AVERAGE_SAMPLES; ++i) {
+      sample.emgRaw = analogRead(hw::EMG_ADC);
+      const uint32_t mv = analogReadMilliVolts(hw::EMG_ADC);
+      emgRawSum += sample.emgRaw;
+      emgMvSum += mv;
+      sample.emgClipped |= sample.emgRaw <= 5 || sample.emgRaw >= cfg::ADC_SATURATION_COUNT || mv < 100 || mv > 3050;
+    }
+    sample.emgAverageRaw = emgRawSum / cfg::EMG_AVERAGE_SAMPLES;
+    sample.emgOutputMv = static_cast<float>(emgMvSum) / cfg::EMG_AVERAGE_SAMPLES;
     sample.fsrRaw = analogRead(hw::FSR_ADC);
     xSemaphoreTake(gStatusMutex, portMAX_DELAY);
     const EmgCalibration calibration = gStatus.emgCalibration;
@@ -251,12 +261,87 @@ static bool saveEmgCalibration(const EmgCalibration& calibration) {
       emgPreferences.putBytes("profile", &calibration, sizeof(calibration)) != sizeof(calibration)) return false;
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.emgCalibration = calibration;
+  gStatus.localBaselineReady = false;
   gStatus.emgReferenceMv = static_cast<uint16_t>(calibration.referenceMv);
   xSemaphoreGive(gStatusMutex);
   return true;
 }
 
+static void baselineState(const char* state, const char* reason) {
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  strlcpy(gStatus.baselineState, state, sizeof(gStatus.baselineState));
+  strlcpy(gStatus.baselineReason, reason, sizeof(gStatus.baselineReason));
+  xSemaphoreGive(gStatusMutex);
+}
+
+static void captureRestBaseline(const RemoteMeasurementCommand* remote = nullptr) {
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.localBaselineReady = false;
+  gStatus.restCandidate = {};
+  strlcpy(gStatus.baselineSessionId, remote ? remote->sessionId : "", sizeof(gStatus.baselineSessionId));
+  strlcpy(gStatus.baselineControlId, remote ? remote->controlId : "", sizeof(gStatus.baselineControlId));
+  gStatus.progress = 0;
+  xSemaphoreGive(gStatusMutex);
+  baselineState("capturing", "Countdown: relax jaw, keep contact still");
+  updateStatus(AppState::EmgCapture, "Relax; no talking or chewing");
+  const uint32_t started = millis();
+  uint32_t previous = 0;
+  EmgRestCapture capture;
+  for (;;) {
+    ButtonEvent button{};
+    const bool cancelled = xQueueReceive(gButtonQueue, &button, 0) == pdTRUE && button.id == ButtonId::Back;
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    const bool superseded = remote
+        ? strcmp(gStatus.webSessionId, remote->sessionId) != 0 || strcmp(gStatus.webControlId, remote->controlId) != 0
+        : gStatus.webSessionActive;
+    const SensorSample sample = gStatus.sample;
+    const uint32_t elapsed = millis() - started;
+    gStatus.progress = elapsed < 3000 ? 0 : min<uint32_t>(100, (elapsed - 3000) / 100);
+    gStatus.countdown = elapsed < 3000 ? 3 - elapsed / 1000 : 0;
+    xSemaphoreGive(gStatusMutex);
+    if (cancelled || superseded) {
+      baselineState("failed", cancelled ? "Cancelled; old baseline kept" : "Control changed; baseline discarded");
+      updateStatus(AppState::EmgReview, "Baseline not saved");
+      return;
+    }
+    if (elapsed >= 3000 && sample.timestampMs != previous) {
+      capture.add(sample.emgOutputMv, sample.emgClipped, elapsed - 3000);
+      previous = sample.timestampMs;
+    }
+    if (elapsed >= 13000) { capture.durationMs = elapsed - 3000; break; }
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.restCandidate = capture;
+  xSemaphoreGive(gStatusMutex);
+  const char* rejection = capture.rejection();
+  baselineState(rejection ? "failed" : "review", rejection ? rejection : "Review baseline before saving");
+  updateStatus(AppState::EmgReview, remote ? "Confirm on dashboard" : "OK Save  BACK Discard");
+}
+
+static void acceptRestBaseline() {
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  const EmgRestCapture capture = gStatus.restCandidate;
+  const bool review = strcmp(gStatus.baselineState, "review") == 0;
+  EmgCalibration calibration = gStatus.emgCalibration;
+  const bool web = gStatus.baselineSessionId[0];
+  xSemaphoreGive(gStatusMutex);
+  if (!review || capture.rejection()) return;
+  calibration.baselineMv = calibration.correctedMv(capture.meanMv);
+  calibration.flags |= 2;
+  const bool saved = saveEmgCalibration(calibration);
+  baselineState(saved ? "ready" : "failed", saved ? "Baseline saved; uV remains estimated" : "Flash write failed; retry baseline");
+  xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+  gStatus.localBaselineReady = saved && !web;
+  xSemaphoreGive(gStatusMutex);
+  updateStatus(AppState::EmgReview, web ? "Continue from dashboard" : "OK Continue  BACK Return");
+}
+
 static void captureEmgCalibration(bool dc) {
+  if (gStatus.webSessionActive) {
+    updateStatus(AppState::EmgCalibrationMenu, "Active web session: use dashboard", true);
+    return;
+  }
   updateStatus(AppState::EmgCapture, dc ? "DC check: hold SIG voltage steady" : "Rest: keep muscle relaxed");
   EmgCapture capture;
   uint32_t lastTimestamp = 0;
@@ -274,7 +359,7 @@ static void captureEmgCalibration(bool dc) {
     }
     SensorSample sample{};
     if (xQueuePeek(gSensorQueue, &sample, 0) == pdTRUE && sample.timestampMs != lastTimestamp) {
-      capture.add(sample.emgRaw, sample.emgOutputMv);
+      capture.add(sample.emgClipped ? 4095 : sample.emgRaw, sample.emgOutputMv);
       lastTimestamp = sample.timestampMs;
     }
     if (millis() - started >= 4000) break;
@@ -305,8 +390,23 @@ static void captureEmgCalibration(bool dc) {
 }
 
 static void runMeasurement(ExaminationType type, bool remoteControlled = false) {
+  if (type == ExaminationType::Emg) {
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    const bool ready = remoteControlled
+        ? strcmp(gStatus.baselineState, "ready") == 0 && strcmp(gStatus.baselineSessionId, gStatus.webSessionId) == 0
+        : gStatus.localBaselineReady && !gStatus.webSessionActive;
+    xSemaphoreGive(gStatusMutex);
+    if (!ready) {
+      updateStatus(AppState::EmgBaseline, "Capture rest baseline before measuring");
+      return;
+    }
+  }
   if (type == ExaminationType::LipForce && !calibrateLipForce()) return;
   if (!remoteControlled && !countdown()) return;
+  if (!remoteControlled && gStatus.webSessionActive) {
+    updateStatus(AppState::Home, "Active web session: use dashboard", true);
+    return;
+  }
 
   ExaminationResult result{};
   const uint32_t started = millis();
@@ -349,9 +449,11 @@ static void runMeasurement(ExaminationType type, bool remoteControlled = false) 
       ++result.sampleCount;
     }
     RemoteMeasurementCommand remote{};
-    if (remoteControlled && xQueueReceive(gRemoteMeasurementQueue, &remote, 0) == pdTRUE) {
-      if (!remote.start) break;
-      if (remote.type != type) {
+    if (xQueueReceive(gRemoteMeasurementQueue, &remote, 0) == pdTRUE) {
+      if ((remote.start || remote.confirmBaseline) &&
+          (strcmp(remote.sessionId, gStatus.webSessionId) != 0 || strcmp(remote.controlId, gStatus.webControlId) != 0)) continue;
+      if (!remote.start && !remote.confirmBaseline) break;
+      if (!remoteControlled || remote.type != type || remote.baseline || remote.confirmBaseline) {
         xQueueSendToFront(gRemoteMeasurementQueue, &remote, 0);
         break;
       }
@@ -382,6 +484,8 @@ static void runMeasurement(ExaminationType type, bool remoteControlled = false) 
     stopMotor();
   }
   if (cancelled) {
+    if (remoteControlled && type == ExaminationType::Emg)
+      baselineState("failed", "Stopped on device; repeat baseline from web");
     xSemaphoreTake(gStatusMutex, portMAX_DELAY);
     gStatus.remoteControlled = false;
     xSemaphoreGive(gStatusMutex);
@@ -403,6 +507,7 @@ static void runMeasurement(ExaminationType type, bool remoteControlled = false) 
   updateStatus(AppState::Result, "Saved locally");
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.remoteControlled = false;
+  if (!remoteControlled) gStatus.localBaselineReady = false;
   xSemaphoreGive(gStatusMutex);
 }
 
@@ -417,7 +522,12 @@ static void appTask(void*) {
   for (;;) {
     RemoteMeasurementCommand remote{};
     if (xQueueReceive(gRemoteMeasurementQueue, &remote, 0) == pdTRUE) {
-      if (remote.start) runMeasurement(remote.type, true);
+      if (remote.confirmBaseline) {
+        if (strcmp(remote.controlId, gStatus.baselineControlId) == 0 &&
+            strcmp(remote.controlId, gStatus.webControlId) == 0 &&
+            strcmp(remote.sessionId, gStatus.webSessionId) == 0) acceptRestBaseline();
+      } else if (remote.baseline) captureRestBaseline(&remote);
+      else if (remote.start) runMeasurement(remote.type, true);
       continue;
     }
     if (xQueueReceive(gButtonQueue, &event, pdMS_TO_TICKS(50)) != pdTRUE) continue;
@@ -435,6 +545,10 @@ static void appTask(void*) {
         gStatus.menuIndex = index;
         xSemaphoreGive(gStatusMutex);
       } else if (event.id == ButtonId::Ok) {
+        if (gStatus.webSessionActive && (index == 0 || index == 2)) {
+          updateStatus(AppState::Home, "Active web session: use dashboard");
+          continue;
+        }
         if (index == 0) updateStatus(AppState::ExaminationMenu, "Choose examination", true);
         else if (index == 1) updateStatus(AppState::History, "Use USB command: results");
         else if (index == 2) updateStatus(AppState::EmgCalibrationMenu, "EMG: gain not calibrated", true);
@@ -452,6 +566,7 @@ static void appTask(void*) {
         const ExaminationType type = static_cast<ExaminationType>(index);
         xSemaphoreTake(gStatusMutex, portMAX_DELAY);
         gStatus.examination = type;
+        gStatus.localBaselineReady = false;
         xSemaphoreGive(gStatusMutex);
         updateStatus(AppState::PatientReady,
           type == ExaminationType::LipForce ? "Install mouthpiece, then press OK" :
@@ -459,7 +574,12 @@ static void appTask(void*) {
           "Position the probe, then press OK");
       }
     } else if (state == AppState::PatientReady && event.id == ButtonId::Ok) {
-      runMeasurement(gStatus.examination);
+      if (gStatus.webSessionActive) updateStatus(AppState::Home, "Active web session: use dashboard", true);
+      else if (gStatus.examination == ExaminationType::Emg && !gStatus.localBaselineReady) {
+        gStatus.baselineForMeasurement = true;
+        updateStatus(AppState::EmgBaseline, "Attach electrodes; relax and keep still");
+      }
+      else runMeasurement(gStatus.examination);
     } else if (state == AppState::EmgCalibrationMenu) {
       if (event.id == ButtonId::Up || event.id == ButtonId::Down) {
         xSemaphoreTake(gStatusMutex, portMAX_DELAY);
@@ -468,6 +588,10 @@ static void appTask(void*) {
       } else if (event.id == ButtonId::Back) {
         updateStatus(AppState::Home, "Ready", true);
       } else if (event.id == ButtonId::Ok) {
+        if (gStatus.webSessionActive) {
+          updateStatus(AppState::Home, "Active web session: use dashboard", true);
+          continue;
+        }
         if (index == 0) {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           gStatus.emgReferenceMv = static_cast<uint16_t>(gStatus.emgCalibration.referenceMv);
@@ -475,6 +599,7 @@ static void appTask(void*) {
           xSemaphoreGive(gStatusMutex);
           updateStatus(AppState::EmgReference, "Enter simultaneous SIG-GND DC reading");
         } else if (index == 1) {
+          gStatus.baselineForMeasurement = false;
           updateStatus(AppState::EmgBaseline, "Use resting signal, not open electrodes");
         } else if (index == 2) {
           updateStatus(AppState::EmgReset, "OK clears DC and rest on this device");
@@ -498,10 +623,22 @@ static void appTask(void*) {
       }
       else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
     } else if (state == AppState::EmgBaseline) {
-      if (event.id == ButtonId::Ok) captureEmgCalibration(false);
+      if (event.id == ButtonId::Ok && !gStatus.webSessionActive) captureRestBaseline();
       else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
+    } else if (state == AppState::EmgReview) {
+      if (event.id == ButtonId::Back) {
+        if (!gStatus.baselineSessionId[0] && strcmp(gStatus.baselineState, "review") == 0)
+          baselineState("failed", "Discarded; old baseline kept");
+        updateStatus(AppState::Home, "Ready", true);
+      } else if (event.id == ButtonId::Ok && !gStatus.webSessionActive) {
+        if (strcmp(gStatus.baselineState, "review") == 0) acceptRestBaseline();
+        else if (gStatus.localBaselineReady) updateStatus(gStatus.baselineForMeasurement ? AppState::PatientReady : AppState::Home,
+            gStatus.baselineForMeasurement ? "Baseline ready. OK starts measurement" : "Baseline ready", true);
+        else updateStatus(AppState::EmgBaseline, "Check contact, then retry");
+      }
     } else if (state == AppState::EmgReset) {
       if (event.id == ButtonId::Ok) {
+        if (gStatus.webSessionActive) { updateStatus(AppState::Home, "Active web session: use dashboard", true); continue; }
         const bool saved = saveEmgCalibration(EmgCalibration{});
         updateStatus(AppState::EmgCalibrationMenu, saved ? "Defaults restored on this device" : "Reset failed: flash error", true);
       } else if (event.id == ButtonId::Back) updateStatus(AppState::EmgCalibrationMenu, "No changes saved", true);
@@ -570,8 +707,8 @@ static void communicationTask(void*) {
       if (c == '\n') {
         line.trim();
         if (line == "emg_selftest") {
-          Serial.printf("{\"emg_selftest\":\"%s\",\"envelope_selftest\":\"%s\"}\n",
-            emgCalibrationSelftest() ? "passed" : "failed", emgEnvelopeSelftest() ? "passed" : "failed");
+          Serial.printf("{\"emg_selftest\":\"%s\",\"envelope_selftest\":\"%s\",\"rest_selftest\":\"%s\"}\n",
+            emgCalibrationSelftest() ? "passed" : "failed", emgEnvelopeSelftest() ? "passed" : "failed", emgRestSelftest() ? "passed" : "failed");
         } else if (line == "emg_status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           const SensorSample sample = gStatus.sample;
@@ -581,10 +718,12 @@ static void communicationTask(void*) {
           Serial.printf("{\"device_id\":\"%s\",\"firmware\":\"%s\",\"state\":%u,\"emg_adc\":%u,"
             "\"emg_adc_mv\":%.1f,\"emg_corrected_mv\":%.1f,\"emg_offset_mv\":%.1f,"
             "\"emg_baseline_mv\":%.1f,\"emg_reference_mv\":%.1f,\"calibration_flags\":%lu,"
-            "\"gain_verified\":false,\"emg_uv_estimate\":%.2f}\n",
+            "\"gain_verified\":false,\"emg_uv_estimate\":%.2f,\"sample_timestamp_ms\":%lu,\"emg_frame_sequence\":%lu,\"emg_avg_adc\":%u,\"emg_clipped\":%s}\n",
             deviceApi.deviceId(), cfg::FIRMWARE_VERSION, static_cast<unsigned>(state), sample.emgRaw,
             sample.emgOutputMv, calibration.correctedMv(sample.emgOutputMv), calibration.dcOffsetMv,
-            calibration.baselineMv, calibration.referenceMv, static_cast<unsigned long>(calibration.flags), sample.emgMicrovolts);
+            calibration.baselineMv, calibration.referenceMv, static_cast<unsigned long>(calibration.flags), sample.emgMicrovolts,
+            static_cast<unsigned long>(sample.timestampMs), static_cast<unsigned long>(sample.emgFrameSequence),
+            sample.emgAverageRaw, sample.emgClipped ? "true" : "false");
         } else if (line == "status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           Serial.printf("{\"state\":%u,\"exam\":%u,\"sensor_ready\":%s,\"fsr_adc\":%u,\"fsr_saturated\":%s,\"pressure_kpa\":%.2f,\"lip_force\":",
@@ -777,6 +916,7 @@ static void syncTask(void*) {
   char activePhase[16]{};
   char activeStage[64]{};
   char activeFsrPoint[32]{};
+  char baselineSentId[40]{}, acceptSentId[40]{}, lastReportId[40]{}, lastReportState[16]{};
   for (;;) {
     if (xQueuePeek(gSyncQueue, &sync, 0) == pdTRUE) {
       if (postSyncEvent(sync)) {
@@ -792,6 +932,11 @@ static void syncTask(void*) {
         millis() - lastControlPoll >= cfg::CONTROL_POLL_MS) {
       RemoteSessionControl next{};
       if (deviceApi.fetchActiveControl(next)) {
+        xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+        gStatus.webSessionActive = next.sessionAvailable;
+        strlcpy(gStatus.webSessionId, next.sessionId, sizeof(gStatus.webSessionId));
+        strlcpy(gStatus.webControlId, next.controlId, sizeof(gStatus.webControlId));
+        xSemaphoreGive(gStatusMutex);
         const bool wasEnabled = control.acquisitionEnabled;
         const bool sourceChanged = strcmp(activeSession, next.sessionId) != 0 ||
                                    strcmp(activeMeasurement, next.measurement) != 0;
@@ -801,12 +946,43 @@ static void syncTask(void*) {
                              strcmp(activeStage, next.protocolStage) != 0 ||
                              strcmp(activeFsrPoint, next.fsrPoint) != 0;
         control = next;
+        const bool emgBaseline = strcmp(control.measurement, "emg") == 0 && strcmp(control.phase, "baseline") == 0;
+        if (emgBaseline && strcmp(baselineSentId, control.controlId) != 0 &&
+            (strcmp(control.baselineState, "requested") == 0 || strcmp(control.baselineState, "capturing") == 0)) {
+          RemoteMeasurementCommand command{ExaminationType::Emg, true};
+          command.baseline = true;
+          strlcpy(command.sessionId, control.sessionId, sizeof(command.sessionId));
+          strlcpy(command.controlId, control.controlId, sizeof(command.controlId));
+          if (xQueueSend(gRemoteMeasurementQueue, &command, 0) == pdTRUE)
+            strlcpy(baselineSentId, control.controlId, sizeof(baselineSentId));
+        }
+        if (emgBaseline && strcmp(control.baselineState, "accepted") == 0 && strcmp(acceptSentId, control.controlId) != 0) {
+          RemoteMeasurementCommand command{ExaminationType::Emg, false};
+          command.confirmBaseline = true;
+          strlcpy(command.sessionId, control.sessionId, sizeof(command.sessionId));
+          strlcpy(command.controlId, control.controlId, sizeof(command.controlId));
+          if (xQueueSend(gRemoteMeasurementQueue, &command, 0) == pdTRUE)
+            strlcpy(acceptSentId, control.controlId, sizeof(acceptSentId));
+        }
+        // Persisted server readiness cannot restore a lost in-RAM candidate after reboot.
+        if ((strcmp(control.baselineState, "ready") == 0 || strcmp(control.baselineState, "review") == 0 ||
+             strcmp(control.baselineState, "accepted") == 0) &&
+            (strcmp(gStatus.baselineControlId, control.baselineControlId) != 0 ||
+             (strcmp(control.baselineState, "ready") == 0 && strcmp(gStatus.baselineState, "ready") != 0))) {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          strlcpy(gStatus.baselineSessionId, control.sessionId, sizeof(gStatus.baselineSessionId));
+          strlcpy(gStatus.baselineControlId, control.baselineControlId, sizeof(gStatus.baselineControlId));
+          xSemaphoreGive(gStatusMutex);
+          baselineState("failed", "Device restarted; take a new baseline");
+        }
         if (control.acquisitionEnabled && (!wasEnabled || sourceChanged)) {
           const ExaminationType type = strcmp(control.measurement, "emg") == 0
               ? ExaminationType::Emg
               : strcmp(control.measurement, "lip_force") == 0
                   ? ExaminationType::LipForce : ExaminationType::TonguePressure;
-          const RemoteMeasurementCommand command{type, true};
+          RemoteMeasurementCommand command{type, true};
+          strlcpy(command.sessionId, control.sessionId, sizeof(command.sessionId));
+          strlcpy(command.controlId, control.controlId, sizeof(command.controlId));
           xQueueSend(gRemoteMeasurementQueue, &command, 0);
         } else if (!control.acquisitionEnabled && wasEnabled) {
           const RemoteMeasurementCommand command{ExaminationType::TonguePressure, false};
@@ -831,7 +1007,21 @@ static void syncTask(void*) {
       lastControlPoll = millis();
     }
 
-    if (!control.acquisitionEnabled) {
+    SharedStatus report{};
+    xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+    report = gStatus;
+    xSemaphoreGive(gStatusMutex);
+    if (report.baselineControlId[0] &&
+        (strcmp(lastReportId, report.baselineControlId) != 0 || strcmp(lastReportState, report.baselineState) != 0) &&
+        deviceApi.reportBaseline(report)) {
+      strlcpy(lastReportId, report.baselineControlId, sizeof(lastReportId));
+      strlcpy(lastReportState, report.baselineState, sizeof(lastReportState));
+    }
+
+    const bool emgCanStream = strcmp(control.measurement, "emg") != 0 ||
+        (report.state == AppState::Measurement && report.remoteControlled && report.examination == ExaminationType::Emg &&
+         strcmp(report.baselineState, "ready") == 0 && strcmp(report.baselineSessionId, control.sessionId) == 0);
+    if (!control.acquisitionEnabled || !emgCanStream) {
       batchCount = 0;
     } else if (batchCount < cfg::REMOTE_BATCH_SAMPLES &&
                millis() - lastRemoteSample >= cfg::REMOTE_SAMPLE_MS) {
@@ -845,8 +1035,8 @@ static void syncTask(void*) {
       if (strcmp(control.measurement, "emg") == 0) {
         point.rawValue = sample.emgRaw;
         point.calibratedValue = sample.emgMicrovolts;
-        point.signalValid = sample.emgRaw > 5 && sample.emgRaw < cfg::ADC_SATURATION_COUNT &&
-            sample.emgOutputMv >= 100 && sample.emgOutputMv <= 3050;
+        point.signalValid = !sample.emgClipped && strcmp(report.baselineState, "ready") == 0 &&
+            strcmp(report.baselineSessionId, control.sessionId) == 0;
       } else if (strcmp(control.measurement, "lip_force") == 0) {
         point.rawValue = sample.lipForce;
         point.calibratedValue = sample.lipForce;

@@ -172,10 +172,14 @@ bool DeviceApi::fetchActiveControl(RemoteSessionControl& control) {
   JsonVariantConst remote = session["control"];
   if (remote.isNull()) return true;
   copyJsonString(remote["measurement"], control.measurement, sizeof(control.measurement));
+  copyJsonString(remote["id"], control.controlId, sizeof(control.controlId));
   copyJsonString(remote["phase"], control.phase, sizeof(control.phase));
   copyJsonString(remote["protocol_stage"], control.protocolStage, sizeof(control.protocolStage));
   copyJsonString(remote["fsr_point"], control.fsrPoint, sizeof(control.fsrPoint));
-  control.acquisitionEnabled = strcmp(control.phase, "baseline") == 0 || strcmp(control.phase, "recording") == 0;
+  copyJsonString(session["emg_baseline"]["control_id"], control.baselineControlId, sizeof(control.baselineControlId));
+  copyJsonString(session["emg_baseline"]["state"], control.baselineState, sizeof(control.baselineState));
+  control.acquisitionEnabled = strcmp(control.phase, "recording") == 0 ||
+      (strcmp(control.phase, "baseline") == 0 && strcmp(control.measurement, "emg") != 0);
   return true;
 }
 
@@ -227,6 +231,30 @@ bool DeviceApi::sendBatch(const RemoteSessionControl& control, const RemoteSampl
   if (deserializeJson(decoded, response)) return false;
   acknowledgedSequence = decoded["sequence"] | sequence;
   return true;
+}
+
+bool DeviceApi::reportBaseline(const SharedStatus& status) {
+  if (!status.baselineSessionId[0] || !status.baselineControlId[0]) return false;
+  JsonDocument document;
+  document["state"] = status.baselineState;
+  document["firmware_version"] = cfg::FIRMWARE_VERSION;
+  document["reason"] = status.baselineReason;
+  if (strcmp(status.baselineState, "review") == 0) {
+    JsonObject metrics = document["metrics"].to<JsonObject>();
+    metrics["samples"] = status.restCandidate.samples;
+    metrics["duration_ms"] = status.restCandidate.durationMs;
+    metrics["mean_mv"] = status.restCandidate.meanMv;
+    metrics["noise_mv"] = status.restCandidate.noiseMv();
+    metrics["span_mv"] = status.restCandidate.spanMv();
+    metrics["drift_mv"] = status.restCandidate.driftMv();
+    metrics["clipped_frames"] = status.restCandidate.clippedFrames;
+  }
+  String body, response;
+  serializeJson(document, body);
+  const int code = request("POST", String("/device/sessions/") + status.baselineSessionId +
+    "/emg-baseline/" + status.baselineControlId, &body, response, true);
+  // A stale/cancelled control must not be retried into a newer baseline.
+  return code == 200 || code == 409;
 }
 
 bool DeviceApi::postEvent(const char* event, const char* messageId, uint32_t uptimeMs) {

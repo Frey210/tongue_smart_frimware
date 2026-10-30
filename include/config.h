@@ -17,7 +17,7 @@ constexpr bool STEPPER_DIR_INVERTED = true;
 }
 
 namespace cfg {
-constexpr char FIRMWARE_VERSION[] = "0.6.1";
+constexpr char FIRMWARE_VERSION[] = "0.7.0";
 constexpr char DEFAULT_API_BASE[] = "https://tongue-smart.farlabs.my.id/api/v1";
 constexpr uint32_t SERIAL_BAUD = 115200;
 constexpr uint32_t SENSOR_PERIOD_MS = 10;   // 100 Hz baseline
@@ -38,6 +38,7 @@ static_assert(LIP_FORCE_DURATION_MIN_SECONDS <= LIP_FORCE_DURATION_DEFAULT_SECON
               "Default lip force duration must stay inside the selectable range");
 constexpr float ADC_MAX_COUNT = 4095.0F;
 constexpr float EMG_FRONTEND_GAIN = 1000.0F; // Unverified gain: displayed uV remain estimates
+constexpr uint8_t EMG_AVERAGE_SAMPLES = 32; // Seeed-style burst mean, not raw sEMG
 constexpr float HX711_COUNTS_PER_NEWTON = 1.0F; // MUST be calibrated with a known force
 constexpr long HX711_OFFSET = 0;
 constexpr float FSR_ZERO_ADC = 0.0F;

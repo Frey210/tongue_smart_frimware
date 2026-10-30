@@ -56,6 +56,15 @@ Respons `202` berisi `receipt_id`, `duplicate`, `sequence`, dan `received_at`. R
 
 ## Keamanan
 
+### EMG baseline handshake (0.7.0)
+
+Fase baseline untuk EMG bukan recording dan tidak membuat batch pemeriksaan.
+Respons sesi aktif membawa emg_baseline; web menunggu review, konfirmasi
+operator, dan acknowledgement ready dari perangkat. Lihat EMG_BASELINE_FLOW.md.
+Baseline/session/control id wajib cocok; calon baseline yang dibatalkan tidak
+boleh menimpa profil yang sudah tersimpan. Rollout backend, frontend dan firmware
+harus sesuai agar perangkat lama tidak terlihat seolah sudah menyelesaikan baseline.
+
 - HTTPS wajib untuk hostname publik.
 - Build prototipe v0.3.0 masih memakai `setInsecure()`; pin CA/certificate bundle wajib sebelum validasi klinis.
 - Jangan log atau tampilkan device key pada serial monitor/LCD.

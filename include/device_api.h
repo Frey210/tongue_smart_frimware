@@ -13,6 +13,7 @@ struct RemoteSessionControl {
   char protocolStage[64]{};
   char fsrPoint[48]{};
   uint32_t nextSequence = 0;
+  char controlId[40]{}, baselineControlId[40]{}, baselineState[16]{};
 };
 
 struct RemoteSample {
@@ -37,6 +38,7 @@ class DeviceApi {
   bool sendBatch(const RemoteSessionControl& control, const RemoteSample* samples,
                  size_t sampleCount, uint32_t sequence, uint32_t& acknowledgedSequence);
   bool postEvent(const char* event, const char* messageId, uint32_t uptimeMs);
+  bool reportBaseline(const SharedStatus& status);
 
  private:
   Preferences* preferences_ = nullptr;

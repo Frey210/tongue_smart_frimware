@@ -3,7 +3,9 @@
 Firmware 0.6.0 adds **Home > Calibration** on the LCD. Calibration belongs to the
 physical ESP32 and is stored in its `emg-cal` NVS namespace. It survives restart
 and ordinary firmware upload. It does not replace Wi-Fi or device credentials.
-No backend deployment is required; calibration input is available on the LCD.
+Firmware 0.7.0 adds a guided rest-baseline review. Standalone LCD input works
+offline; web-controlled acquisition requires the matching backend/frontend
+baseline handshake (see EMG_BASELINE_FLOW.md).
 
 ## Supplied reference data, reviewed 24 October 2026
 
@@ -32,11 +34,16 @@ COM20 was identified before upload as TS-D4085CF93030, in Home, paired.
 
 The sensor task reads raw ADC counts and `analogReadMilliVolts(GPIO4)`, which uses
 the ESP32 ADC voltage calibration. They are successive conversions, NOT the
-same instantaneous sample. Raw counts remain raw counts in exported data.
+same instantaneous sample. Since 0.7.0, each sensor frame averages 32 voltage
+conversions and separately averages raw counts. The exported raw value remains
+the last unaveraged ADC count; `emgAverageRaw` is a separate diagnostic field.
+Every conversion is checked for clipping before averaging. This mirrors the
+Seeed demonstration's burst-mean concept, not its timing or clinical validity.
 
 ```
 corrected output mV = ADC output mV + saved DC correction mV
-estimated input uV = abs(corrected output mV - saved rest output mV) * 1000 / assumed gain
+centered mV = corrected averaged output mV - saved rest output mV
+estimated input uV = smoothed RMS(centered mV) * 1000 / assumed gain
 ```
 
 Since 0.6.1 the centered output uses a rolling RMS over 25 samples (nominal
@@ -48,7 +55,9 @@ non-finite input and acquisition gaps over 100 ms reset the envelope.
 This reduces indicator jitter, adds response delay and changes amplitude
 semantics from the former rectified EMA. It does not reject mains interference,
 repair saturation or compensate unstable electrode contact. Raw ADC/mV and
-existing validity checks remain unchanged. No baseline is learned automatically.
+validity checks are preserved. No baseline is learned automatically. In 0.7.0
+RMS is applied to the burst-mean sequence: it is NOT RMS of the original
+unaveraged electrode waveform. Do not compare amplitudes across processing versions.
 This is not raw signed sEMG or a verified input-referred uV measurement.
 The gain remains unverified at 1000. LCD measurement units say `uV est`.
 For API compatibility, web packets still use `uV`; historical records are not
@@ -82,15 +91,23 @@ electrical reference/test fixture and check wiring first if necessary.
 ## LCD: resting baseline
 
 Choose **Capture rest baseline**. Read the preparation screen, then OK to capture
-and save 4 seconds. BACK cancels. Repeat after changing electrode placement.
+and begin a 3-second countdown followed by 10 seconds of capture. BACK cancels.
+Review the mean, variation, drift and sample count; OK saves only after passing
+the checks. BACK discards the candidate and retains the previous stored profile.
+Repeat after changing electrode placement. A new local EMG examination asks for
+a fresh baseline; a web session has its own baseline handshake.
 
 This option is for a correctly installed, resting signal. Do NOT capture open
 electrodes as a physiological baseline. Before using electrodes on a person,
 the device's patient isolation and supply/USB connections must have been verified.
 A DMM supply reading does not establish electrical safety.
 
-The same stability and clipping guards apply. Previous profile is retained on
-failure/cancel. A pending web start interrupts capture before a new profile is saved.
+Engineering rest guards (not clinical thresholds): 800-3000 sensor frames,
+9.5-15 seconds acquisition, mean 100-3000 mV, no clipped/out-of-range frame,
+standard deviation <=25 mV, span <=100 mV, difference between first-half and
+last-half means <=30 mV. DC-check guards above stay separate and stricter.
+Previous stored profile is retained on failure/cancel. Web control supersedes
+local capture; local baseline/DC/reset cannot modify an active web session.
 
 ## LCD: reset
 
