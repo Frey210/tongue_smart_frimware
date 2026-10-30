@@ -94,3 +94,16 @@ Reference: https://github.com/Seeed-Studio/Grove_EMG_detector_demo_code
 - Frontend dependency audit reported three high-severity findings (nanoid,
   source-map-js, vite). Dependency remediation is outstanding; no automatic
   dependency upgrade was bundled into this sensor workflow change.
+
+### Second device update - 2026-10-30
+
+Device TS-0468FEF61B44 (ESP32-S3 MAC 44:1b:f6:fe:68:04) received the same
+production firmware 0.7.0 through COM26. Build/upload and flash hash verification
+passed; no full-chip/NVS erase was performed. Operator confirmed electrodes off
+body and motor safe before upload. Serial confirmed WiFi connected, paired,
+Home state, all three EMG software self-tests passed and no reset markers during
+the 12-second observation. Frame counters advanced at 100 Hz. No baseline or
+human measurement was initiated. Calibration flags were zero (default settings),
+so this device still requires its own guided resting baseline before EMG use;
+calibration was not copied from the first device. HX711 reported not ready
+during this check; lip-force hardware was not validated.
