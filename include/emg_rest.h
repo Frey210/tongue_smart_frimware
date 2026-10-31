@@ -8,9 +8,9 @@ struct EmgRestCapture {
   float firstSum = 0, lastSum = 0;
   uint32_t durationMs = 0;
   void add(float mv, bool clipped, uint32_t elapsedMs) {
-    if (!isfinite(mv)) { ++clippedFrames; return; }
+    // Ignore contaminated frames instead of letting one spike bias the baseline.
+    if (clipped || !isfinite(mv) || mv < 100 || mv > 3050) { ++clippedFrames; return; }
     ++samples;
-    if (clipped || mv < 100 || mv > 3050) ++clippedFrames;
     const float delta = mv - meanMv;
     meanMv += delta / samples;
     m2 += delta * (mv - meanMv);
@@ -22,23 +22,33 @@ struct EmgRestCapture {
   float spanMv() const { return samples ? maximum - minimum : 0; }
   float driftMv() const { return firstCount && lastCount ? fabsf(firstSum / firstCount - lastSum / lastCount) : 10000; }
   const char* rejection() const {
-    if (clippedFrames) return "ADC clipping / range: check signal";
-    if (samples < 800 || samples > 3000 || durationMs < 9500 || durationMs > 15000) return "Missing samples: repeat baseline";
+    const uint32_t total = samples + clippedFrames;
+    if (clippedFrames * 20 > total) return "Too much ADC clipping: check signal";
+    if (samples < 800 || total > 3000 || !firstCount || !lastCount || durationMs < 9500 || durationMs > 15000) return "Missing samples: repeat baseline";
     if (meanMv < 100 || meanMv > 3000) return "Baseline voltage out of range";
-    if (noiseMv() > 25 || spanMv() > 100 || driftMv() > 30) return "Signal unstable: relax, check contact";
+    return nullptr;
+  }
+  const char* warning() const {
+    if (noiseMv() > 25 || spanMv() > 100 || driftMv() > 30) return "High variation; confirm only if relaxed";
+    if (clippedFrames) return "ADC spikes skipped; review mean";
     return nullptr;
   }
 };
 
 inline bool emgRestSelftest() {
-  EmgRestCapture good, clipped, drift;
+  EmgRestCapture good, clipped, excessiveClipping, drift, invalid, missingHalf;
   for (unsigned i = 0; i < 1000; ++i) {
     good.add(1500 + (i % 2 ? 5 : -5), false, i * 10);
-    clipped.add(1500, i == 9, i * 10);
+    clipped.add(i % 20 == 0 ? 3050 : 1500, i % 20 == 0, i * 10);
+    excessiveClipping.add(1500, i % 10 == 0, i * 10);
     drift.add(i < 500 ? 1400 : 1600, false, i * 10);
+    invalid.add(NAN, false, i * 10);
+    missingHalf.add(1500, false, 1000);
   }
-  good.durationMs = clipped.durationMs = drift.durationMs = 10000;
-  if (good.rejection() || !clipped.rejection() || !drift.rejection()) return false;
+  good.durationMs = clipped.durationMs = excessiveClipping.durationMs = drift.durationMs = invalid.durationMs = missingHalf.durationMs = 10000;
+  if (good.rejection() || clipped.rejection() || drift.rejection() || good.warning()) return false;
+  if (!clipped.warning() || !drift.warning() || !excessiveClipping.rejection() || !invalid.rejection() || !missingHalf.rejection()) return false;
+  if (clipped.samples != 950 || clipped.clippedFrames != 50 || fabsf(clipped.meanMv - 1500) > .01F) return false;
   if (fabsf(good.meanMv - 1500) > .01F || fabsf(good.noiseMv() - 5) > .01F) return false;
   good.durationMs = 2000;
   return good.rejection() != nullptr;

@@ -1,4 +1,4 @@
-# EMG baseline workflow - firmware 0.7.0
+# EMG baseline workflow - firmware 0.7.1
 
 ## Processing assumptions
 
@@ -14,6 +14,31 @@ the original unaveraged waveform. Gain remains an unverified assumption of
 1000. No mapping to a target 150-250 uV or forced zero resting activity is used.
 API unit remains uV for compatibility; LCD/web explicitly say estimate.
 Baseline noise is recorded, not silently subtracted to hide interference.
+
+## Relaxed resting baseline - 0.7.1
+
+The reference is the arithmetic mean of valid averaged voltage frames captured
+for 10 seconds: baseline = sum(valid mV) / valid frame count. Measurement uses
+the existing voltage correction, subtracts this fixed baseline, then computes
+the RMS/EMA indicator. This is offset referencing, not gain calibration or
+mapping to an arbitrary normal clinical amplitude. No new sensor coefficient
+is copied between devices.
+
+ADC-clipped/non-finite/out-of-range frames are excluded from the mean and counted
+separately. Up to 5% discarded frames is allowed. At least 800 valid frames,
+both halves of the capture, 9.5-15 seconds, at most 3000 total frames, and a mean
+inside 100-3000 mV remain required. Persistent clipping or an absent capture is
+still rejected; arbitrary input cannot be made valid by normalization.
+
+Noise above 25 mV, span above 100 mV and drift above 30 mV now generate review
+warnings instead of rejection. Occasional discarded frames also generate a
+warning. Operator confirmation and device acknowledgement remain mandatory.
+If the subject moved or contracted during capture, repeat even if confirmation
+is allowed. A variable baseline can reduce repeatability; warning is not proof
+of acceptable electrode contact. API records estimator=mean-valid-frames-v2;
+older reports default to mean-all-frames-v1. Matching backend validation must
+be deployed before web use with 0.7.1. No frontend change is required because
+the existing panel already displays reason and candidate statistics.
 
 ## Offline LCD
 

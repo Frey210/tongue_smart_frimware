@@ -315,7 +315,7 @@ static void captureRestBaseline(const RemoteMeasurementCommand* remote = nullptr
   gStatus.restCandidate = capture;
   xSemaphoreGive(gStatusMutex);
   const char* rejection = capture.rejection();
-  baselineState(rejection ? "failed" : "review", rejection ? rejection : "Review baseline before saving");
+  baselineState(rejection ? "failed" : "review", rejection ? rejection : capture.warning() ? capture.warning() : "Review mean baseline before saving");
   updateStatus(AppState::EmgReview, remote ? "Confirm on dashboard" : "OK Save  BACK Discard");
 }
 
@@ -330,7 +330,7 @@ static void acceptRestBaseline() {
   calibration.baselineMv = calibration.correctedMv(capture.meanMv);
   calibration.flags |= 2;
   const bool saved = saveEmgCalibration(calibration);
-  baselineState(saved ? "ready" : "failed", saved ? "Baseline saved; uV remains estimated" : "Flash write failed; retry baseline");
+  baselineState(saved ? "ready" : "failed", saved ? (capture.warning() ? "Saved with warning; uV estimated" : "Mean baseline saved; uV estimated") : "Flash write failed; retry baseline");
   xSemaphoreTake(gStatusMutex, portMAX_DELAY);
   gStatus.localBaselineReady = saved && !web;
   xSemaphoreGive(gStatusMutex);

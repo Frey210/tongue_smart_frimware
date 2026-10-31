@@ -248,6 +248,7 @@ bool DeviceApi::reportBaseline(const SharedStatus& status) {
     metrics["span_mv"] = status.restCandidate.spanMv();
     metrics["drift_mv"] = status.restCandidate.driftMv();
     metrics["clipped_frames"] = status.restCandidate.clippedFrames;
+    metrics["estimator"] = "mean-valid-frames-v2";
   }
   String body, response;
   serializeJson(document, body);
