@@ -132,3 +132,23 @@ human measurement was initiated. Calibration flags were zero (default settings),
 so this device still requires its own guided resting baseline before EMG use;
 calibration was not copied from the first device. HX711 reported not ready
 during this check; lip-force hardware was not validated.
+
+### Relaxed baseline release verification - 2026-10-31
+
+Firmware e9f010c (0.7.1) built and uploaded to TS-D4085CF93030 on COM20;
+flash hash verification passed. Serial confirmed all three software self-tests
+passed, 100 Hz across six snapshots, and no reset markers during a 12-second
+observation. Existing calibration flags remained 2; WiFi and pairing remained
+active. The self-test covers exact 5% discarded-frame acceptance, exclusion of
+spikes from the mean, excessive clipping rejection, variable baseline warnings,
+non-finite input, missing capture half and insufficient duration. No baseline
+capture, human measurement or motor sequence was started. HX711 was not ready.
+
+Backend 9df0939 passed 12 tests and was pushed/deployed through Tailscale.
+Public HTTPS health/ready and live relaxed metric schema checks passed; both
+containers were healthy. The pre-existing active session on the other device
+was in failed baseline state, not recording, and was not deleted or modified.
+Frontend code/layout stayed unchanged: the existing review panel displays the
+baseline warning and metrics. Browser tests were not repeated for this backend
+and firmware-only change. Other devices have not received 0.7.1 in this update;
+each needs its own firmware upload and a newly captured resting baseline.
