@@ -184,7 +184,6 @@ void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
     } else if (s.state == AppState::EmgReview) {
       tft_.drawString("Hasil baseline istirahat", 18, 62, 2);
       tft_.drawString("uV masih estimasi; gain belum diuji", 18, 88, 1);
-      tft_.drawString(s.baselineSessionId[0] ? "Konfirmasi / ulangi dari dashboard" : "OK Simpan / lanjut   BACK Batal", 18, 222, 1);
     } else if (s.state == AppState::EmgReset) {
       tft_.drawString("CLEAR THIS DEVICE'S DC + REST?", 18, 70, 2);
       tft_.drawString("Pairing and WiFi stay unchanged.", 18, 110, 2);
@@ -192,7 +191,7 @@ void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
     } else {
       tft_.drawString(strcmp(s.baselineState, "capturing") == 0 ? "Rileks - baseline 10 detik" : "Capturing DC for 4 seconds", 18, 70, 2);
       tft_.drawString(s.message, 18, 100, 1);
-      tft_.drawString("Saturasi / sinyal tidak stabil ditolak", 18, 188, 1);
+      tft_.drawString("Rata-rata valid; saturasi menetap ditolak", 18, 188, 1);
       tft_.drawString("BACK Cancel", 18, 220, 2);
     }
   }
@@ -238,20 +237,21 @@ void UserInterface::drawEmgCalibration(const SharedStatus& s, bool initialize) {
       tft_.fillRect(18, 170, 284 * s.progress / 100, 4, TFT_CYAN);
     }
   } else if (s.state == AppState::EmgReview) {
-    tft_.fillRect(18, 106, 284, 99, BG);
+    tft_.fillRect(18, 106, 284, 127, BG);
     tft_.setTextColor(TFT_WHITE, BG);
-    if (!s.restCandidate.samples) {
-      tft_.drawString("Tidak ada hasil baseline tersimpan", 18, 120, 2);
-      tft_.drawString(s.baselineReason, 18, 165, 1);
-      return;
-    }
-    snprintf(text, sizeof(text), "Mean %.1f mV  Noise %.1f mV", s.restCandidate.meanMv, s.restCandidate.noiseMv());
+    const bool failed = strcmp(s.baselineState, "failed") == 0;
+    if (s.restCandidate.samples) snprintf(text, sizeof(text), "Baseline %.1f mV", s.restCandidate.meanMv);
+    else strlcpy(text, "Belum ada frame valid", sizeof(text));
     tft_.drawString(text, 18, 120, 2);
-    snprintf(text, sizeof(text), "Drift %.1f mV   %lu sampel", s.restCandidate.driftMv(), static_cast<unsigned long>(s.restCandidate.samples));
-    tft_.drawString(text, 18, 145, 1);
-    tft_.setTextColor(strcmp(s.baselineState, "failed") == 0 ? TFT_ORANGE : TFT_CYAN, BG);
-    tft_.drawString(s.baselineReason, 18, 171, 1);
-    tft_.drawString(s.message, 18, 195, 1);
+    snprintf(text, sizeof(text), "Frame valid %lu  Ditolak %lu", static_cast<unsigned long>(s.restCandidate.samples), static_cast<unsigned long>(s.restCandidate.clippedFrames));
+    tft_.drawString(text, 18, 142, 1);
+    snprintf(text, sizeof(text), "ADC %u  %.0f mV  Valid %u/%u", s.sample.emgAverageRaw, s.sample.emgOutputMv, s.sample.emgValidMvReadings, cfg::EMG_AVERAGE_SAMPLES);
+    tft_.drawString(text, 18, 158, 1);
+    tft_.setTextColor(failed ? TFT_ORANGE : TFT_CYAN, BG);
+    const char* rejection = s.restCandidate.durationMs ? s.restCandidate.rejection() : nullptr;
+    tft_.drawString(failed && rejection ? rejection : s.baselineReason, 18, 178, 1);
+    tft_.drawString(s.message, 18, 198, 1);
+    tft_.drawString(failed ? (s.baselineSessionId[0] ? "Ulangi baseline dari dashboard" : "BACK Kembali; ulangi baseline") : s.baselineSessionId[0] ? "Konfirmasi dari dashboard" : "OK Simpan / lanjut   BACK Batal", 18, 222, 1);
   }
 }
 

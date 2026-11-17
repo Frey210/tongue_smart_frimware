@@ -20,6 +20,7 @@ struct SensorSample {
   uint16_t emgRaw;
   float emgOutputMv;
   uint16_t emgAverageRaw;
+  uint8_t emgValidRawReadings, emgValidMvReadings;
   bool emgClipped;
   uint16_t fsrRaw;
   float emgMicrovolts;

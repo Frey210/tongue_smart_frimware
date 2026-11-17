@@ -15,6 +15,7 @@
 #include "ui.h"
 #include "emg_calibration_selftest.h"
 #include "emg_envelope.h"
+#include "emg_sampling.h"
 
 QueueHandle_t gSensorQueue, gButtonQueue, gMotorQueue, gStorageQueue, gSensorCommandQueue, gWifiCommandQueue, gSyncQueue,
     gRemoteMeasurementQueue;
@@ -100,16 +101,17 @@ static void sensorTask(void*) {
     SensorSample sample{};
     sample.timestampMs = millis();
     sample.emgFrameSequence = ++emgFrameSequence;
-    uint32_t emgRawSum = 0, emgMvSum = 0;
+    EmgBurstMean burst;
     for (unsigned i = 0; i < cfg::EMG_AVERAGE_SAMPLES; ++i) {
       sample.emgRaw = analogRead(hw::EMG_ADC);
       const uint32_t mv = analogReadMilliVolts(hw::EMG_ADC);
-      emgRawSum += sample.emgRaw;
-      emgMvSum += mv;
-      sample.emgClipped |= sample.emgRaw <= 5 || sample.emgRaw >= cfg::ADC_SATURATION_COUNT || mv < 100 || mv > 3050;
+      burst.add(sample.emgRaw, mv);
     }
-    sample.emgAverageRaw = emgRawSum / cfg::EMG_AVERAGE_SAMPLES;
-    sample.emgOutputMv = static_cast<float>(emgMvSum) / cfg::EMG_AVERAGE_SAMPLES;
+    sample.emgAverageRaw = burst.rawMean();
+    sample.emgOutputMv = burst.mvMean();
+    sample.emgValidRawReadings = burst.validRaw;
+    sample.emgValidMvReadings = burst.validMv;
+    sample.emgClipped = !burst.usable();
     sample.fsrRaw = analogRead(hw::FSR_ADC);
     xSemaphoreTake(gStatusMutex, portMAX_DELAY);
     const EmgCalibration calibration = gStatus.emgCalibration;
@@ -315,8 +317,11 @@ static void captureRestBaseline(const RemoteMeasurementCommand* remote = nullptr
   gStatus.restCandidate = capture;
   xSemaphoreGive(gStatusMutex);
   const char* rejection = capture.rejection();
-  baselineState(rejection ? "failed" : "review", rejection ? rejection : capture.warning() ? capture.warning() : "Review mean baseline before saving");
-  updateStatus(AppState::EmgReview, remote ? "Confirm on dashboard" : "OK Save  BACK Discard");
+  char reason[120];
+  if (rejection) snprintf(reason, sizeof(reason), "%s (%lu/%lu frames rejected)", rejection,
+      static_cast<unsigned long>(capture.clippedFrames), static_cast<unsigned long>(capture.samples + capture.clippedFrames));
+  baselineState(rejection ? "failed" : "review", rejection ? reason : capture.warning() ? capture.warning() : "Review mean baseline before saving");
+  updateStatus(AppState::EmgReview, rejection ? (remote ? "Retry baseline on dashboard" : "BACK Return; repeat baseline") : remote ? "Confirm on dashboard" : "OK Save  BACK Discard");
 }
 
 static void acceptRestBaseline() {
@@ -359,7 +364,8 @@ static void captureEmgCalibration(bool dc) {
     }
     SensorSample sample{};
     if (xQueuePeek(gSensorQueue, &sample, 0) == pdTRUE && sample.timestampMs != lastTimestamp) {
-      capture.add(sample.emgClipped ? 4095 : sample.emgRaw, sample.emgOutputMv);
+      capture.add(sample.emgClipped || sample.emgValidRawReadings != cfg::EMG_AVERAGE_SAMPLES ||
+          sample.emgValidMvReadings != cfg::EMG_AVERAGE_SAMPLES ? 4095 : sample.emgAverageRaw, sample.emgOutputMv);
       lastTimestamp = sample.timestampMs;
     }
     if (millis() - started >= 4000) break;
@@ -707,8 +713,8 @@ static void communicationTask(void*) {
       if (c == '\n') {
         line.trim();
         if (line == "emg_selftest") {
-          Serial.printf("{\"emg_selftest\":\"%s\",\"envelope_selftest\":\"%s\",\"rest_selftest\":\"%s\"}\n",
-            emgCalibrationSelftest() ? "passed" : "failed", emgEnvelopeSelftest() ? "passed" : "failed", emgRestSelftest() ? "passed" : "failed");
+          Serial.printf("{\"emg_selftest\":\"%s\",\"envelope_selftest\":\"%s\",\"rest_selftest\":\"%s\",\"sampling_selftest\":\"%s\"}\n",
+            emgCalibrationSelftest() ? "passed" : "failed", emgEnvelopeSelftest() ? "passed" : "failed", emgRestSelftest() ? "passed" : "failed", emgSamplingSelftest() ? "passed" : "failed");
         } else if (line == "emg_status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           const SensorSample sample = gStatus.sample;
@@ -718,12 +724,20 @@ static void communicationTask(void*) {
           Serial.printf("{\"device_id\":\"%s\",\"firmware\":\"%s\",\"state\":%u,\"emg_adc\":%u,"
             "\"emg_adc_mv\":%.1f,\"emg_corrected_mv\":%.1f,\"emg_offset_mv\":%.1f,"
             "\"emg_baseline_mv\":%.1f,\"emg_reference_mv\":%.1f,\"calibration_flags\":%lu,"
-            "\"gain_verified\":false,\"emg_uv_estimate\":%.2f,\"sample_timestamp_ms\":%lu,\"emg_frame_sequence\":%lu,\"emg_avg_adc\":%u,\"emg_clipped\":%s}\n",
+            "\"gain_verified\":false,\"emg_uv_estimate\":%.2f,\"sample_timestamp_ms\":%lu,\"emg_frame_sequence\":%lu,\"emg_avg_adc\":%u,\"emg_clipped\":%s,\"valid_raw_readings\":%u,\"valid_mv_readings\":%u}\n",
             deviceApi.deviceId(), cfg::FIRMWARE_VERSION, static_cast<unsigned>(state), sample.emgRaw,
             sample.emgOutputMv, calibration.correctedMv(sample.emgOutputMv), calibration.dcOffsetMv,
             calibration.baselineMv, calibration.referenceMv, static_cast<unsigned long>(calibration.flags), sample.emgMicrovolts,
             static_cast<unsigned long>(sample.timestampMs), static_cast<unsigned long>(sample.emgFrameSequence),
-            sample.emgAverageRaw, sample.emgClipped ? "true" : "false");
+            sample.emgAverageRaw, sample.emgClipped ? "true" : "false", sample.emgValidRawReadings, sample.emgValidMvReadings);
+        } else if (line == "emg_baseline_status") {
+          xSemaphoreTake(gStatusMutex, portMAX_DELAY);
+          const EmgRestCapture capture = gStatus.restCandidate;
+          char state[24]; strlcpy(state, gStatus.baselineState, sizeof(state));
+          xSemaphoreGive(gStatusMutex);
+          Serial.printf("{\"baseline_state\":\"%s\",\"valid_frames\":%lu,\"rejected_frames\":%lu,\"mean_mv\":%.2f,\"duration_ms\":%lu}\n",
+            state, static_cast<unsigned long>(capture.samples), static_cast<unsigned long>(capture.clippedFrames),
+            capture.meanMv, static_cast<unsigned long>(capture.durationMs));
         } else if (line == "status") {
           xSemaphoreTake(gStatusMutex, portMAX_DELAY);
           Serial.printf("{\"state\":%u,\"exam\":%u,\"sensor_ready\":%s,\"fsr_adc\":%u,\"fsr_saturated\":%s,\"pressure_kpa\":%.2f,\"lip_force\":",
@@ -745,7 +759,7 @@ static void communicationTask(void*) {
           const WifiCommand command{WifiCommandType::StartPairing};
           xQueueSend(gWifiCommandQueue, &command, 0);
           Serial.println("{\"pairing\":\"starting\"}");
-        } else if (line == "help") Serial.println("commands: help, status, emg_status, emg_selftest, results, wifi_setup, pair_device");
+        } else if (line == "help") Serial.println("commands: help, status, emg_status, emg_baseline_status, emg_selftest, results, wifi_setup, pair_device");
         else Serial.println("{\"error\":\"unknown command\"}");
         line = "";
       } else if (c != '\r' && line.length() < 96) line += c;
@@ -1033,7 +1047,7 @@ static void syncTask(void*) {
       RemoteSample& point = batch[batchCount++];
       utcTimestamp(point.timestamp, sizeof(point.timestamp));
       if (strcmp(control.measurement, "emg") == 0) {
-        point.rawValue = sample.emgRaw;
+        point.rawValue = sample.emgAverageRaw;
         point.calibratedValue = sample.emgMicrovolts;
         point.signalValid = !sample.emgClipped && strcmp(report.baselineState, "ready") == 0 &&
             strcmp(report.baselineSessionId, control.sessionId) == 0;

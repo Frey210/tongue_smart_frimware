@@ -1,4 +1,4 @@
-# EMG baseline workflow - firmware 0.7.1
+# EMG baseline workflow - firmware 0.7.2
 
 ## Processing assumptions
 
@@ -14,6 +14,39 @@ the original unaveraged waveform. Gain remains an unverified assumption of
 1000. No mapping to a target 150-250 uV or forced zero resting activity is used.
 API unit remains uV for compatibility; LCD/web explicitly say estimate.
 Baseline noise is recorded, not silently subtracted to hide interference.
+
+## Per-reading spike rejection - 0.7.2
+
+Fixes the previous any-spike-in-32 invalidates-whole-frame rule. Each burst now
+averages only valid raw ADC readings and valid calibrated mV readings separately;
+analogRead and analogReadMilliVolts are independent conversions, not a paired
+raw/mV observation. A valid frame requires at least 24/32 readings in EACH stream.
+The existing 10-second baseline averages the accepted frame means. The 0.7.1
+capture-level safeguards (minimum frames/duration, mean bounds, at most 5% rejected
+frames) remain. This is not an unlimited mean of saturated or missing input.
+
+Individual raw readings <=5 or >=4090 and voltage readings outside 100-3050 mV
+are excluded before averaging. If there are no valid readings, the observed
+finite average is displayed for troubleshooting but remains invalid. Stable rail
+input is not converted to a plausible baseline. DC-reference calibration still
+requires a completely clean burst; spike tolerance does not relax DC calibration.
+
+Serial emg_status adds valid_raw_readings and valid_mv_readings (out of 32).
+emg_baseline_status reports candidate valid/rejected frames, mean and duration.
+Failed reports now include rejection counts in reason, and LCD shows frame
+counts/current ADC/mV instead of only 'no result'. Failed results offer retry,
+not confirmation. This small error-recovery refinement preserves the LCD theme.
+The web handshake/metrics schema remains compatible (mean-valid-frames-v2);
+no backend/frontend deployment is required. Failed metrics remain absent from
+the backend metrics object; use reason counts or serial for failed captures.
+
+EMG raw_value uploaded by 0.7.2 is now the valid-readings ADC mean, matching the
+voltage indicator; older firmware uploaded the last individual raw conversion.
+Do not mix these raw representations without accounting for firmware version.
+µV remains an unverified gain estimate, not clinical calibrated raw sEMG.
+Four device self-tests include independent conversion spikes, exact 24/32
+acceptance, insufficient valid readings, rail/nonfinite/short bursts, and a
+1000-frame baseline with isolated spikes in every burst (mean stays 1500 mV).
 
 ## Relaxed resting baseline - 0.7.1
 
@@ -152,3 +185,29 @@ Frontend code/layout stayed unchanged: the existing review panel displays the
 baseline warning and metrics. Browser tests were not repeated for this backend
 and firmware-only change. Other devices have not received 0.7.1 in this update;
 each needs its own firmware upload and a newly captured resting baseline.
+
+### TS-02 baseline correction verification - 2026-11-17
+
+COM26 identified TS-0468FEF61B44 still running 0.7.0, not the relaxed 0.7.1
+release. Before upload, off-body voltage snapshots were approximately
+1485.8-1489.6 mV without clipping; these observations do not establish the
+cause of earlier on-body capture failures. The old any-spike-per-burst rule
+was an additional sensitivity defect corrected in 0.7.2.
+
+Production 0.7.2 built successfully (RAM 48,800 bytes; flash 1,147,753 bytes)
+and uploaded through COM26 with flash hashes verified. No full-chip/NVS erase
+was performed. Operator confirmed electrodes off body and motor safe.
+All four serial software self-tests passed, including the 1000-frame isolated
+spike baseline test. Across a 17-second serial observation, the device remained
+at Home with WiFi and pairing active; no reset markers were detected. Five
+snapshots showed 100 Hz, valid raw/mV readings 32/32, no clipping and output
+1484.2-1488.9 mV. Existing calibration flags 2 and baseline 1761.1 mV remained.
+These off-body voltages/old-baseline estimates are not physiological readings.
+
+No baseline capture, human measurement, motor sequence or visual LCD inspection
+was performed. A newly placed-electrode resting baseline must still be captured
+and reviewed by the operator; persistent saturation is intentionally rejected.
+HX711 reported not ready, so lip-force hardware was not validated. TS-01 was
+not updated in this operation. No web deployment was needed for this compatible
+firmware-only change. Build retained the existing TFT touch-pin warning; the
+device uses physical buttons rather than a configured touch controller.
