@@ -211,3 +211,27 @@ HX711 reported not ready, so lip-force hardware was not validated. TS-01 was
 not updated in this operation. No web deployment was needed for this compatible
 firmware-only change. Build retained the existing TFT touch-pin warning; the
 device uses physical buttons rather than a configured touch controller.
+
+### TS-01 baseline correction verification - 2026-11-21
+
+COM20 identified TS-D4085CF93030 running 0.7.1. Operator confirmed electrodes
+off body and motor safe, and explicitly selected upload of 0.7.2 for the EMG
+baseline only; force calibration/new lip-force guards are deferred. The exact
+production code at 69981aa built successfully (RAM 48,800 bytes; flash
+1,147,753 bytes) and uploaded on COM20 with flash hashes verified. No full-chip
+or NVS erase was performed; WiFi, pairing and calibration were preserved.
+
+All four serial software self-tests passed. In a 17-second observation the
+device stayed at Home; WiFi and pairing were active and no reset markers were
+detected. Five EMG snapshots showed 100 Hz, raw/mV valid readings 32/32,
+no clipping, and off-body ADC output 1461.6-1468.9 mV. Existing baseline
+1569.8 mV and calibration flags 2 remained. No baseline capture, human
+measurement, motor command or visual LCD inspection was performed. Operator
+must acquire/review a fresh resting baseline after electrode placement.
+
+HX711 was ready at the status snapshot and reported 63190 with the unchanged
+placeholder scale/untared boot offset. This is not a verified force in Newton.
+The selected update does not correct Newton/kPa calibration, historic data or
+server statistics. README records source references and the known-force method
+needed for a subsequent device-specific calibration. No web deployment was
+needed or performed for this compatible firmware upload.

@@ -60,3 +60,31 @@ Sebelum dipakai secara klinis, tentukan dan validasi:
 Build saat ini menggunakan TLS terenkripsi tetapi verifikasi CA masih dinonaktifkan untuk prototipe Phase 1. Root CA harus dipin atau memakai certificate bundle sebelum validasi klinis. Baseline ini bukan perangkat medis tervalidasi dan tidak boleh menghasilkan keputusan klinis sebelum proses verifikasi tersebut selesai.
 
 Skala FSR bawaan masih berupa placeholder linear: ADC 0–4095 dipetakan ke 0–100 kPa. Pembacaan ADC ≥4090 ditampilkan sebagai saturasi (`>100.0`) dan dikirim dengan kualitas `invalid`; nilai di atas rentang ADC tidak dapat ditaksir sampai rangkaian dan kurva kalibrasi FSR divalidasi.
+
+### Referensi satuan dan tindak lanjut kalibrasi (2026-11-21)
+
+- HX711: [panduan library](https://github.com/bogde/HX711#how-to-calibrate-your-load-cell)
+  mensyaratkan beban acuan untuk menentukan faktor skala, bukan angka universal.
+  Untuk massa acuan `m` kg dengan pendekatan gravitasi standar,
+  `F_acuan = m * 9.80665` N dan `counts_per_N = (raw_berbeban - raw_nol) / F_acuan`.
+  Nilai gravitasi standar/konversi kgf bersumber dari
+  [NIST](https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b-conversion-factors/nist-guide-si-appendix-b8).
+  Faktor tetap harus diukur dan diverifikasi pada tiap alat dengan geometri
+  pembebanan yang benar. Kapasitas load cell dalam kg bukan faktor ADC/N.
+- FSR402: [Seeed](https://wiki.seeedstudio.com/Grove-Round_Force_Sensor_FSR402/)
+  menyebut respons tidak linear dan rentang sensitivitas gaya 0.2–20 N;
+  itu bukan rentang tekanan kPa. Konversi fisik membutuhkan gaya terkalibrasi
+  dan luas kontak efektif: `p_kPa = F_N / A_m2 / 1000`.
+- EMG Grove: [Seeed](https://wiki.seeedstudio.com/Grove-EMG_Detector/)
+  menyebut output standby nominal 1.5 V, output maksimum 3.3 V dan catu
+  3.3–5 V, serta menyatakan sensor tidak untuk keperluan medis. Output 1.5 V
+  bukan baseline wajib atau gain input uV yang tervalidasi; baseline tetap
+  diukur dari sampel saat elektroda terpasang dan subjek rileks.
+- [Penelitian oral screen](https://pmc.ncbi.nlm.nih.gov/articles/PMC5719824/)
+  menunjukkan gaya bibir dipengaruhi ukuran screen dan individu. Nilai studi
+  tidak digunakan untuk memaksa pembacaan alat ke rentang yang tampak normal.
+
+Operator memilih upload firmware baseline 0.7.2 saja pada COM20; koefisien,
+pengaman baru lip force, koreksi statistik server dan rekalkulasi data lama
+ditunda. Jadi upload ini tidak memperbaiki validitas Newton/kPa. Hindari
+interpretasi klinis sebelum kalibrasi dan validasi alat selesai.
